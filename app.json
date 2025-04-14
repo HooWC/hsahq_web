@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "Hong Seng Group",
+    "slug": "hongsenghq",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/logo.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1E88E5"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/logo.png",
+        "backgroundColor": "#1E88E5"
+      }
+    },
+    "web": {
+      "favicon": "./assets/logo.png",
+      "bundler": "webpack",
+      "build": {
+        "publicPath": "./",
+        "basePath": "./",
+        "assetPublicPath": "./"
+      },
+      "pwa": true,
+      "meta": {
+        "viewport": "width=device-width, initial-scale=1, maximum-scale=5.0, user-scalable=yes"
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "08196c93-09d0-474c-a10a-5eddc4c36fd6"
+      }
+    }
+  }
+}
