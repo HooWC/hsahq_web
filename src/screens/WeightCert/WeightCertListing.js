@@ -71,7 +71,7 @@ const WeightCertItem = ({ item, index, navigation }) => {
           <View style={styles.cardContent}>
             <View style={styles.cardRowsContainer}>
               <View style={styles.cardRow}>
-                <Text style={styles.cardLabel}>ID</Text>
+                <Text style={styles.cardLabel}>Model ID</Text>
                 <Text style={styles.cardValue}>{item.model_id || '-'}</Text>
               </View>
               <View style={styles.cardRow}>
@@ -110,16 +110,29 @@ const WeightCertListing = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const pageSize = 100;
 
-  const fetchWeightCerts = async () => {
+  const fetchWeightCerts = async (pageNum = 1, shouldAppend = false) => {
     try {
+      // Set loading states
+      if (pageNum === 1) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
       // 跨平台获取 token
       const token = Platform.OS === 'web'
         ? window.localStorage.getItem('userToken')
         : await AsyncStorage.getItem('userToken');
-      console.log('Token:', token);
 
-      const response = await fetch(`${CONFIG.API_BASE_URL}/weightCerts`, {
+      // Build the URL with query parameters
+      const url = `${CONFIG.API_BASE_URL}/weightCerts?page=${pageNum}&size=${pageSize}`;
+      
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -128,8 +141,16 @@ const WeightCertListing = () => {
       });
 
       const data = await response.json();
-      //console.log('WeightCerts data:', data);
-      setWeightCerts(data);
+      
+      // Update state based on whether we're appending or refreshing
+      if (shouldAppend) {
+        setWeightCerts(prev => [...prev, ...data]);
+      } else {
+        setWeightCerts(data);
+      }
+      
+      // Check if we have more data to load
+      setHasMore(data.length === pageSize);
       
     } catch (err) {
       console.error('Error:', err);
@@ -137,42 +158,88 @@ const WeightCertListing = () => {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
+    }
+  };
+
+  // Search function that uses the API endpoint
+  const searchWeightCerts = async (query) => {
+    if (!query.trim()) {
+      // If search is empty, reset to first page of data
+      setPage(1);
+      fetchWeightCerts(1, false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      const token = Platform.OS === 'web'
+        ? window.localStorage.getItem('userToken')
+        : await AsyncStorage.getItem('userToken');
+
+      const response = await fetch(`${CONFIG.API_BASE_URL}/weightCerts?search=${query}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      });
+
+      const data = await response.json();
+      setWeightCerts(data);
+      setHasMore(false); // When searching, we don't implement pagination
+      
+    } catch (err) {
+      console.error('Error:', err);
+      setError('Failed to search data');
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchWeightCerts();
+    fetchWeightCerts(1, false);
   }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchWeightCerts();
+    setPage(1);
+    fetchWeightCerts(1, false);
+  };
+
+  const loadMoreData = () => {
+    if (!hasMore || loadingMore || refreshing || loading || searchQuery) return;
+    
+    const nextPage = page + 1;
+    setPage(nextPage);
+    fetchWeightCerts(nextPage, true);
   };
 
   const handleSearch = (text) => {
     setSearchQuery(text);
   };
-
-  const filteredCerts = weightCerts.filter(cert => {
-    if (!cert) return false;
-    const searchLower = searchQuery.toLowerCase();
-    
-    // 检查所有字段，使用String()函数替代toString()方法
-    return (
-      (cert.mgroup_id && String(cert.mgroup_id).toLowerCase().includes(searchLower)) || // Model Group
-      (cert.make && String(cert.make).toLowerCase().includes(searchLower)) || // Make
-      (cert.model_id && String(cert.model_id).toLowerCase().includes(searchLower)) || // Id
-      (cert.wheelbase && String(cert.wheelbase).toLowerCase().includes(searchLower)) || // Wheelbase
-      (cert.bdm_w && String(cert.bdm_w).toLowerCase().includes(searchLower)) || // BDM/BGK(W)
-      (cert.bdm_e && String(cert.bdm_e).toLowerCase().includes(searchLower)) || // BDM/BGK(G)
-      (cert.axle && String(cert.axle).toLowerCase().includes(searchLower)) // Axle
-    );
-  });
+  
+  const executeSearch = () => {
+    searchWeightCerts(searchQuery);
+  };
 
   // 修改renderWeightCert，使用独立的组件
   const renderWeightCert = ({ item, index }) => {
     if (!item) return null;
     return <WeightCertItem item={item} index={index} navigation={navigation} />;
+  };
+
+  // Render footer with loading indicator when loading more data
+  const renderFooter = () => {
+    if (!loadingMore) return null;
+    
+    return (
+      <View style={styles.footerLoader}>
+        <ActivityIndicator size="small" color="#F43F5E" />
+        <Text style={styles.footerText}>Loading more...</Text>
+      </View>
+    );
   };
 
   if (loading && !refreshing) {
@@ -207,17 +274,24 @@ const WeightCertListing = () => {
       {/* Search Bar */}
       <View style={styles.searchWrapper}>
         <View style={styles.searchContainer}>
-          <Ionicons name="search" size={20} color="#64748B" />
+          <TouchableOpacity onPress={executeSearch}>
+            <Ionicons name="search" size={20} color="#64748B" />
+          </TouchableOpacity>
           <TextInput
             style={styles.searchInput}
             placeholder="Search"
             value={searchQuery}
             onChangeText={handleSearch}
             placeholderTextColor="#64748B"
+            onSubmitEditing={executeSearch}
+            returnKeyType="search"
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity
-              onPress={() => setSearchQuery('')}
+              onPress={() => {
+                setSearchQuery('');
+                onRefresh();
+              }}
               style={styles.clearButton}
             >
               <Ionicons name="close-circle" size={20} color="#64748B" />
@@ -236,7 +310,7 @@ const WeightCertListing = () => {
 
       {/* List */}
       <FlatList
-        data={filteredCerts}
+        data={weightCerts}
         renderItem={renderWeightCert}
         keyExtractor={(item, index) => `${item.id || index}`}
         contentContainerStyle={styles.listContainer}
@@ -248,6 +322,9 @@ const WeightCertListing = () => {
           />
         }
         showsVerticalScrollIndicator={false}
+        onEndReached={loadMoreData}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={renderFooter}
         ListEmptyComponent={
           !error && (
             <View style={styles.emptyContainer}>
@@ -448,6 +525,17 @@ const styles = StyleSheet.create({
   emptyButtonText: {
     color: COLORS.white,
     fontWeight: 'bold',
+  },
+  footerLoader: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: SPACING.md,
+  },
+  footerText: {
+    marginLeft: SPACING.sm,
+    color: '#64748B',
+    fontSize: SIZES.small,
   }
 });
 

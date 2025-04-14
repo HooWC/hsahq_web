@@ -213,21 +213,44 @@ const CMHListing = () => {
     setSearchQuery(text);
   };
 
-  const filteredCMH = cmhData.filter(item => {
-    if (!item) return false;
-    const searchLower = searchQuery.toLowerCase();
-    
-    // 检查所有字段
-    return (
-      (item.stock_id && String(item.stock_id).toLowerCase().includes(searchLower)) ||
-      (item.item_id && String(item.item_id).toLowerCase().includes(searchLower)) ||
-      (item.mgroup_id && String(item.mgroup_id).toLowerCase().includes(searchLower)) ||
-      (item.customer && String(item.customer).toLowerCase().includes(searchLower)) ||
-      (item.status && String(item.status).toLowerCase().includes(searchLower)) ||
-      (item.location && String(item.location).toLowerCase().includes(searchLower)) ||
-      (item.createdt && String(new Date(item.createdt).toLocaleDateString()).toLowerCase().includes(searchLower))
-    );
-  });
+  const executeSearch = async () => {
+    if (!searchQuery.trim()) {
+      // If search is empty, reset to first page of data
+      setPage(1);
+      fetchCMHData(1, true);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setCmhData([]);
+      
+      const token = Platform.OS === 'web'
+        ? window.localStorage.getItem('userToken')
+        : await AsyncStorage.getItem('userToken');
+
+      // Using the API endpoint to search all data in the database, not just loaded data
+      const response = await fetch(`${CONFIG.API_BASE_URL}/cmh?search=${searchQuery}&size=1000`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+      setCmhData(data);
+      // Update pagination state for search results
+      setHasMoreData(false); // Disable pagination for search results
+      setPage(1); // Reset page number
+      
+    } catch (err) {
+      console.error('Error:', err);
+      setError('Failed to search data');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // 修改renderCMHItem，现在它使用分离的组件
   const renderCMHItem = ({ item, index }) => {
@@ -278,17 +301,24 @@ const CMHListing = () => {
       {/* Search Bar */}
       <View style={styles.searchWrapper}>
         <View style={styles.searchContainer}>
-          <Ionicons name="search" size={20} color="#64748B" />
+          <TouchableOpacity onPress={executeSearch}>
+            <Ionicons name="search" size={20} color="#64748B" />
+          </TouchableOpacity>
           <TextInput
             style={styles.searchInput}
             placeholder="Search"
             value={searchQuery}
             onChangeText={handleSearch}
             placeholderTextColor="#64748B"
+            onSubmitEditing={executeSearch}
+            returnKeyType="search"
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity
-              onPress={() => setSearchQuery('')}
+              onPress={() => {
+                setSearchQuery('');
+                onRefresh();
+              }}
               style={styles.clearButton}
             >
               <Ionicons name="close-circle" size={20} color="#64748B" />
@@ -307,7 +337,7 @@ const CMHListing = () => {
 
       {/* List */}
       <FlatList
-        data={filteredCMH}
+        data={cmhData}
         renderItem={renderCMHItem}
         keyExtractor={(item, index) => `${item?.stock_id ? item.stock_id.trim() : ''}_${index}`}
         contentContainerStyle={styles.listContainer}

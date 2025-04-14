@@ -64,7 +64,7 @@ const PlanItem = ({ item, index, navigation }) => {
               </Text>
             </View>
             <View style={styles.cardBadge}>
-              <Text style={styles.cardBadgeText}>MID: {item.model_id || 'N/A'}</Text>
+              <Text style={styles.cardBadgeText}>ModelID: {item.model_id || 'N/A'}</Text>
             </View>
           </View>
           
@@ -106,15 +106,28 @@ const PlanListing = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const pageSize = 100;
 
-  const fetchPlans = async () => {
+  const fetchPlans = async (pageNum = 1, shouldAppend = false) => {
     try {
+      // Set loading states
+      if (pageNum === 1) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
       const token = Platform.OS === 'web'
         ? window.localStorage.getItem('userToken')
         : await AsyncStorage.getItem('userToken');
-      //console.log('Token:', token);
 
-      const response = await fetch(`${CONFIG.API_BASE_URL}/plans`, {
+      // Build the URL with query parameters
+      const url = `${CONFIG.API_BASE_URL}/plans?page=${pageNum}&size=${pageSize}`;
+      
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -123,8 +136,16 @@ const PlanListing = () => {
       });
 
       const data = await response.json();
-      //console.log('Plans data:', data);
-      setPlans(data);
+      
+      // Update state based on whether we're appending or refreshing
+      if (shouldAppend) {
+        setPlans(prev => [...prev, ...data]);
+      } else {
+        setPlans(data);
+      }
+      
+      // Check if we have more data to load
+      setHasMore(data.length === pageSize);
       
     } catch (err) {
       console.error('Error:', err);
@@ -132,39 +153,102 @@ const PlanListing = () => {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
+    }
+  };
+
+  // Search function that uses the API endpoint
+  const searchPlans = async (query) => {
+    if (!query.trim()) {
+      // If search is empty, reset to first page of data
+      setPage(1);
+      fetchPlans(1, false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      const token = Platform.OS === 'web'
+        ? window.localStorage.getItem('userToken')
+        : await AsyncStorage.getItem('userToken');
+
+      const response = await fetch(`${CONFIG.API_BASE_URL}/plans?search=${query}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      });
+
+      const data = await response.json();
+      setPlans(data);
+      setHasMore(false); // When searching, we don't implement pagination
+      
+    } catch (err) {
+      console.error('Error:', err);
+      setError('Failed to search data');
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchPlans();
+    fetchPlans(1, false);
   }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchPlans();
+    setPage(1);
+    fetchPlans(1, false);
+  };
+
+  const loadMoreData = () => {
+    if (!hasMore || loadingMore || refreshing || loading || searchQuery) return;
+    
+    const nextPage = page + 1;
+    setPage(nextPage);
+    fetchPlans(nextPage, true);
   };
 
   const handleSearch = (text) => {
     setSearchQuery(text);
   };
+  
+  const executeSearch = () => {
+    searchPlans(searchQuery);
+  };
 
-  const filteredPlans = plans.filter(plan => {
-    if (!plan) return false;
-    const searchLower = searchQuery.toLowerCase();
-    
-    return (
-      (plan.plan_id && String(plan.plan_id).toLowerCase().includes(searchLower)) ||
-      (plan.model_id && String(plan.model_id).toLowerCase().includes(searchLower)) ||
-      (plan.body_type && String(plan.body_type).toLowerCase().includes(searchLower)) ||
-      (plan.bdm && String(plan.bdm).toLowerCase().includes(searchLower)) ||
-      (plan.wheelbase && String(plan.wheelbase).toLowerCase().includes(searchLower))
-    );
-  });
+  // Original local filtering code (commented out as requested)
+  // const filteredPlans = plans.filter(plan => {
+  //   if (!plan) return false;
+  //   const searchLower = searchQuery.toLowerCase();
+  //   
+  //   return (
+  //     (plan.plan_id && String(plan.plan_id).toLowerCase().includes(searchLower)) ||
+  //     (plan.model_id && String(plan.model_id).toLowerCase().includes(searchLower)) ||
+  //     (plan.body_type && String(plan.body_type).toLowerCase().includes(searchLower)) ||
+  //     (plan.bdm && String(plan.bdm).toLowerCase().includes(searchLower)) ||
+  //     (plan.wheelbase && String(plan.wheelbase).toLowerCase().includes(searchLower))
+  //   );
+  // });
 
   // 使用单独的组件
   const renderPlan = ({ item, index }) => {
     if (!item) return null;
     return <PlanItem item={item} index={index} navigation={navigation} />;
+  };
+
+  // Render footer with loading indicator when loading more data
+  const renderFooter = () => {
+    if (!loadingMore) return null;
+    
+    return (
+      <View style={styles.footerLoader}>
+        <ActivityIndicator size="small" color="#1E293B" />
+        <Text style={styles.footerText}>Loading more...</Text>
+      </View>
+    );
   };
 
   if (loading && !refreshing) {
@@ -198,17 +282,24 @@ const PlanListing = () => {
       {/* Search Bar */}
       <View style={styles.searchWrapper}>
         <View style={styles.searchContainer}>
-          <Ionicons name="search" size={20} color="#64748B" />
+          <TouchableOpacity onPress={executeSearch}>
+            <Ionicons name="search" size={20} color="#64748B" />
+          </TouchableOpacity>
           <TextInput
             style={styles.searchInput}
             placeholder="Search"
             value={searchQuery}
             onChangeText={handleSearch}
             placeholderTextColor="#64748B"
+            onSubmitEditing={executeSearch}
+            returnKeyType="search"
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity
-              onPress={() => setSearchQuery('')}
+              onPress={() => {
+                setSearchQuery('');
+                onRefresh();
+              }}
               style={styles.clearButton}
             >
               <Ionicons name="close-circle" size={20} color="#64748B" />
@@ -227,7 +318,7 @@ const PlanListing = () => {
 
       {/* List */}
       <FlatList
-        data={filteredPlans}
+        data={plans}
         renderItem={renderPlan}
         keyExtractor={(item, index) => `${item.id || index}`}
         contentContainerStyle={styles.listContainer}
@@ -240,6 +331,9 @@ const PlanListing = () => {
           />
         }
         showsVerticalScrollIndicator={false}
+        onEndReached={loadMoreData}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={renderFooter}
         ListEmptyComponent={
           !error && (
             <View style={styles.emptyContainer}>
@@ -456,6 +550,17 @@ const styles = StyleSheet.create({
   emptyButtonText: {
     color: COLORS.white,
     fontWeight: 'bold',
+  },
+  footerLoader: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: SPACING.md,
+  },
+  footerText: {
+    marginLeft: SPACING.sm,
+    color: '#64748B',
+    fontSize: SIZES.small,
   }
 });
 
