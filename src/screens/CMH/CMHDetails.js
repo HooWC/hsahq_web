@@ -487,7 +487,7 @@ const CMHDetails = () => {
                         <Text style={styles.pdfText} numberOfLines={1} ellipsizeMode="tail">
                           {item.file_name || item.doctype || `PDF ${index + 1}`}
                         </Text>
-                        <Text style={styles.filePathText} numberOfLines={1} ellipsizeMode="tail">
+                        <Text style={styles.filePathText}>
                           {item.file_path}
                         </Text>
                       </TouchableOpacity>
@@ -499,12 +499,12 @@ const CMHDetails = () => {
                       <TouchableOpacity
                         key={`file-${index}`}
                         style={[
-                          styles.imageContainer,
+                          styles.imageContainer, 
                           Platform.OS !== 'web' && styles.imageContainerMobile
                         ]}
                         onPress={() => handleImagePress(fileUrl)}
                       >
-                        <Image
+                        <Image 
                           source={{ uri: fileUrl }}
                           style={styles.imagePreview}
                           resizeMode="cover"
@@ -653,7 +653,7 @@ const styles = StyleSheet.create({
   section: {
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.md,
-    padding: SPACING.md,
+    padding: SPACING.sm,
     marginBottom: SPACING.md,
     ...SHADOWS.light,
   },
@@ -782,19 +782,21 @@ const styles = StyleSheet.create({
   },
   imageOverlay: {
     borderRadius: '3px',
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    padding: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 3,
+    maxHeight: width * 0.2,
     marginBottom: '5px',
   },
   filePathText: {
-    fontSize: 10,
+    fontSize: 8,
     color: '#ffffff',
     textAlign: 'center',
     marginTop: 2,
+    flexWrap: 'wrap',
   },
   pdfButton: {
     width: width * 0.44,
-    height: width * 0.35,
+    height: width * 0.4,
     borderRadius: RADIUS.md,
     marginBottom: SPACING.md,
     padding: SPACING.sm,
