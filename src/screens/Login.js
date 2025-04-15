@@ -349,7 +349,7 @@ const Login = () => {
               
               <View style={styles.footerTextContainer}>
                 <Text style={styles.footerText}>© {new Date().getFullYear()} Hong Seng Group</Text>
-                <Text style={styles.footerVersion}>v1.0.0</Text>
+                <Text style={styles.footerVersion}>{CONFIG.VERSION}</Text>
               </View>
               </Animated.View>
           </KeyboardAvoidingView>

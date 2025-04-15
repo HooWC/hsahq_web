@@ -208,7 +208,32 @@ const PlanListing = () => {
         });
 
         const data = await response.json();
-        setFilteredPlans(data);
+        
+        // 对于wheelbase搜索，即使是API搜索也要确保精确匹配
+        let filteredData = data;
+        if (type === 'wheelbase' && !isNaN(query) && query.indexOf('.') === -1) {
+          filteredData = data.filter(item => {
+            // 处理 wheelbase 可能有 "3200 + 1400 mm" 这样的格式
+            const wheelbaseStr = item.wheelbase?.toString() || '';
+            
+            // 处理方式1：如果 wheelbase 是单一数值（如 "3800"、"3800 mm"）
+            if (wheelbaseStr.match(/^\d+(\s*mm)?$/i)) {
+              const numericPart = parseInt(wheelbaseStr);
+              return numericPart === parseInt(query);
+            }
+            
+            // 处理方式2：如果 wheelbase 是组合值（如 "3200 + 1400 mm"）
+            // 只匹配第一个数字部分
+            const firstNumber = wheelbaseStr.match(/^\d+/);
+            if (firstNumber) {
+              return parseInt(firstNumber[0]) === parseInt(query);
+            }
+            
+            return false;
+          });
+        }
+        
+        setFilteredPlans(filteredData);
         setSearchPerformed(true);
         setHasMore(false); // 搜索时不使用分页
       } 
@@ -229,9 +254,32 @@ const PlanListing = () => {
             );
             break;
           case 'wheelbase':
-            newFilteredResults = newFilteredResults.filter(item => 
-              item.wheelbase?.toLowerCase().includes(query.toLowerCase())
-            );
+            newFilteredResults = newFilteredResults.filter(item => {
+              // 如果用户输入了精确数值，则精确匹配
+              if (!isNaN(query) && query.indexOf('.') === -1) {
+                // 处理 wheelbase 可能有 "3200 + 1400 mm" 这样的格式
+                // 提取纯数字部分，忽略 "+ 1400 mm" 这样的后缀
+                const wheelbaseStr = item.wheelbase?.toString() || '';
+                
+                // 处理方式1：如果 wheelbase 是单一数值（如 "3800"、"3800 mm"）
+                if (wheelbaseStr.match(/^\d+(\s*mm)?$/i)) {
+                  const numericPart = parseInt(wheelbaseStr);
+                  return numericPart === parseInt(query);
+                }
+                
+                // 处理方式2：如果 wheelbase 是组合值（如 "3200 + 1400 mm"）
+                // 只匹配第一个数字部分
+                const firstNumber = wheelbaseStr.match(/^\d+/);
+                if (firstNumber) {
+                  return parseInt(firstNumber[0]) === parseInt(query);
+                }
+                
+                return false;
+              } else {
+                // 如果不是精确数值搜索，使用宽松匹配
+                return item.wheelbase?.toLowerCase().includes(query.toLowerCase());
+              }
+            });
             break;
           default:
             break;
@@ -304,7 +352,6 @@ const PlanListing = () => {
     setBodyTypeQuery(text);
   };
 
-  // 执行搜索操作
   const executeSimpleSearch = () => {
     if (simpleSearchQuery.trim()) {
       searchPlans(simpleSearchQuery, 'general', true);
@@ -315,7 +362,6 @@ const PlanListing = () => {
 
   const executeModelIdSearch = () => {
     if (searchQuery.trim()) {
-      // 如果已经执行过搜索，就过滤结果
       searchPlans(searchQuery, 'model_id', !searchPerformed);
     }
   };
@@ -397,7 +443,7 @@ const PlanListing = () => {
         >
           <Ionicons name={advancedMode ? "options" : "options-outline"} size={20} color="#1E293B" />
           <Text style={styles.modeToggleText}>
-            {advancedMode ? "简单搜索" : "高级搜索"}
+            {advancedMode ? "Simple" : "Advanced"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -412,7 +458,7 @@ const PlanListing = () => {
             </TouchableOpacity>
             <TextInput
               style={styles.searchInput}
-              placeholder="搜索计划"
+              placeholder="Search plan"
               value={simpleSearchQuery}
               onChangeText={handleSimpleSearch}
               placeholderTextColor="#64748B"
@@ -440,7 +486,7 @@ const PlanListing = () => {
               </TouchableOpacity>
               <TextInput
                 style={styles.searchInput}
-                placeholder="搜索 Model ID"
+                placeholder="Search Model ID"
                 value={searchQuery}
                 onChangeText={handleModelIdSearch}
                 placeholderTextColor="#64748B"
@@ -451,7 +497,6 @@ const PlanListing = () => {
                   onPress={() => {
                     setSearchQuery('');
                     if (searchPerformed && (bodytypeQuery.trim() || wheelbseQuery.trim())) {
-                      // 如果有其他搜索条件，重新执行搜索
                       if (bodytypeQuery.trim()) {
                         searchPlans(bodytypeQuery, 'body_type', true);
                       } else if (wheelbseQuery.trim()) {
@@ -475,7 +520,7 @@ const PlanListing = () => {
               </TouchableOpacity>
               <TextInput
                 style={styles.searchInput}
-                placeholder="搜索 Body Type"
+                placeholder="Search Body Type"
                 value={bodytypeQuery}
                 onChangeText={handleBodyTypeSearch}
                 placeholderTextColor="#64748B"
@@ -486,7 +531,6 @@ const PlanListing = () => {
                   onPress={() => {
                     setBodyTypeQuery('');
                     if (searchPerformed && (searchQuery.trim() || wheelbseQuery.trim())) {
-                      // 如果有其他搜索条件，重新执行搜索
                       if (searchQuery.trim()) {
                         searchPlans(searchQuery, 'model_id', true);
                       } else if (wheelbseQuery.trim()) {
@@ -510,7 +554,7 @@ const PlanListing = () => {
               </TouchableOpacity>
               <TextInput
                 style={styles.searchInput}
-                placeholder="搜索 Wheelbase"
+                placeholder="Search Wheelbase"
                 value={wheelbseQuery}
                 onChangeText={handleWheelbseSearch}
                 placeholderTextColor="#64748B"
@@ -521,7 +565,6 @@ const PlanListing = () => {
                   onPress={() => {
                     setWheelbseQuery('');
                     if (searchPerformed && (searchQuery.trim() || bodytypeQuery.trim())) {
-                      // 如果有其他搜索条件，重新执行搜索
                       if (searchQuery.trim()) {
                         searchPlans(searchQuery, 'model_id', true);
                       } else if (bodytypeQuery.trim()) {
@@ -546,7 +589,7 @@ const PlanListing = () => {
             style={styles.resetButton}
             onPress={resetAllSearches}
           >
-            <Text style={styles.resetButtonText}>重置搜索</Text>
+            <Text style={styles.resetButtonText}>Reset</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -583,14 +626,14 @@ const PlanListing = () => {
               <Ionicons name="document-text-outline" size={60} color="#94a3b8" />
               <Text style={styles.emptyText}>
                 {searchPerformed
-                  ? "未找到匹配的计划" 
-                  : "没有找到计划"}
+                  ? "No matching plans found" 
+                  : "No plan found"}
               </Text>
               <TouchableOpacity 
                 style={[styles.emptyButton, { backgroundColor: '#1E293B' }]} 
                 onPress={onRefresh}
               >
-                <Text style={styles.emptyButtonText}>刷新</Text>
+                <Text style={styles.emptyButtonText}>Refresh</Text>
               </TouchableOpacity>
             </View>
           )

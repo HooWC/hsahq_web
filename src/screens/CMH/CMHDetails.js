@@ -10,6 +10,9 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  Image,
+  Modal,
+  Linking,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,7 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, SIZES, SHADOWS, RADIUS } from '../../constants/theme';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 const TabButton = ({ icon, label, active, onPress }) => (
   <TouchableOpacity
@@ -52,6 +55,98 @@ const CMHDetails = () => {
   const [chassisfileData, setChassisfileData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedImage, setSelectedImage] = useState('');
+
+  // 处理图片路径
+  const getImageUrl = (filePath) => {
+    if (!filePath) return null;
+    
+    // 如果已经是有效的URL或相对路径格式，直接返回
+    if (filePath.startsWith('http') || filePath.startsWith('chassis/')) {
+      return filePath;
+    }
+    
+    // 移除V盘路径前缀，只保留相对路径部分
+    let formattedPath = filePath;
+    
+    // 移除V:\FILE\CHASSIS前缀，无论大小写
+    if (formattedPath.toUpperCase().includes('V:\\FILE\\CHASSIS')) {
+      formattedPath = formattedPath.replace(/V:\\FILE\\CHASSIS\\?/i, '');
+    } else if (formattedPath.toUpperCase().includes('V:/FILE/CHASSIS')) {
+      formattedPath = formattedPath.replace(/V:\/FILE\/CHASSIS\/?/i, '');
+    } else if (formattedPath.toUpperCase().includes('V:\\FILE\\')) {
+      formattedPath = formattedPath.replace(/V:\\FILE\\?/i, '');
+    }
+    
+    // 将所有反斜杠替换为正斜杠
+    formattedPath = formattedPath.replace(/\\/g, '/');
+    
+    // 去除路径开头的斜杠
+    while (formattedPath.startsWith('/')) {
+      formattedPath = formattedPath.substring(1);
+    }
+    
+    // 添加chassis/前缀
+    if (!formattedPath.startsWith('chassis/')) {
+      formattedPath = 'chassis/' + formattedPath;
+    }
+    
+    // 统一返回相对路径，对于web和移动端都使用相同格式
+    return formattedPath;
+  };
+
+  // 判断文件是否为PDF
+  const isPdfFile = (filePath) => {
+    if (!filePath) return false;
+    return filePath.toLowerCase().endsWith('.pdf');
+  };
+  
+  // 处理PDF打开
+  const handleOpenPdf = async (pdfUrl) => {
+    if (!pdfUrl) {
+      if (Platform.OS === 'web') {
+        window.alert('PDF URL not available');
+      } else {
+        Alert.alert('Error', 'PDF URL not available');
+      }
+      return;
+    }
+
+    try {
+      // For web and mobile browsers
+      if (Platform.OS === 'web') {
+        // Open in new tab
+        window.open(pdfUrl, '_blank');
+      } else {
+        // For React Native apps
+        const supported = await Linking.canOpenURL(pdfUrl);
+        
+        if (supported) {
+          await Linking.openURL(pdfUrl);
+        } else {
+          Alert.alert(
+            'Mistake',
+            `Unable to open this URL: ${pdfUrl}`,
+            [{ text: 'Sure' }]
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Failed to open PDF:', err);
+      if (Platform.OS === 'web') {
+        window.alert('Failed to open PDF');
+      } else {
+        Alert.alert('Error', 'Failed to open PDF');
+      }
+    }
+  };
+  
+  // 处理图片点击放大
+  const handleImagePress = (imageUrl) => {
+    setSelectedImage(imageUrl);
+    setModalVisible(true);
+  };
 
   useEffect(() => {
     const fetchAdditionalData = async () => {
@@ -288,9 +383,9 @@ const CMHDetails = () => {
   <Text style={styles.sectionTitle}>SO</Text>
 
   {dsoiData && dsoiData.length > 0 ? (
-    dsoiData.filter(item => item.so_id).length > 0 ? ( // 确保至少有一个 item.so_id
+    dsoiData.filter(item => item.so_id).length > 0 ? ( 
       dsoiData
-        .filter(item => item.so_id) // 过滤掉没有 so_id 的数据
+        .filter(item => item.so_id) 
         .map((item, index) => (
           <TouchableOpacity
             key={`dsoi-${index}`}
@@ -304,7 +399,7 @@ const CMHDetails = () => {
                 </Text>
                 <Text style={styles.chassisEntryDate}>
                 {item.ddate ? (() => {
-    const date = new Date(item.ddate); // 解析 ISO 日期
+    const date = new Date(item.ddate);
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')} ` +
            `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
 })() : 'N/A'}
@@ -340,35 +435,91 @@ const CMHDetails = () => {
         </View>
       ) : (
         <>
-        <View style={styles.section}>
-  <Text style={styles.sectionTitle}>Document Files Information</Text>
-  {chassisfileData && chassisfileData.length > 0 && chassisfileData.some(item => 
-    Object.values(item).some(value => value !== null && value !== '')
-  ) ? (
-    chassisfileData
-      .filter(item => Object.values(item).some(value => value !== null && value !== ''))
-      .map((item, index) => (
-        <TouchableOpacity
-          key={`file-${index}`}
-          style={styles.fileItemCard}
-          onPress={() => navigation.navigate('FileDetailScreen', { fileData: item })}
-        >
-          <View style={styles.fileItemHeader}>
-            <Text style={styles.fileItemId}>File #{item.pk || '-'}</Text>
-            <Text style={styles.fileItemName} numberOfLines={1} ellipsizeMode="tail">
-              {item.doctype || 'Unnamed File'}
-            </Text>
+          {/* Image viewing modal box */}
+          <Modal
+            animationType="fade"
+            transparent={true}
+            visible={modalVisible}
+            onRequestClose={() => setModalVisible(false)}
+          >
+            <View style={styles.modalContainer}>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setModalVisible(false)}
+              >
+                <Ionicons name="close-circle" size={32} color="#fff" />
+              </TouchableOpacity>
+              <Image
+                source={{ uri: selectedImage }}
+                style={styles.fullImage}
+                resizeMode="contain"
+                onError={() => {
+                  if (Platform.OS === 'web') {
+                    window.alert('Failed to load image');
+                  } else {
+                    Alert.alert("Error", "Failed to load image");
+                  }
+                  setModalVisible(false);
+                }}
+              />
+            </View>
+          </Modal>
+          
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Documentation file</Text>
+            {chassisfileData && chassisfileData.length > 0 && chassisfileData.some(item => 
+              item.file_path && item.file_path !== ''
+            ) ? (
+              <View style={styles.imageGallery}>
+                {chassisfileData
+                  .filter(item => item.file_path && item.file_path !== '')
+                  .map((item, index) => {
+                    const fileUrl = getImageUrl(item.file_path);
+                    const isPdf = isPdfFile(item.file_path);
+                    
+                    return isPdf ? (
+                      <TouchableOpacity
+                        key={`file-${index}`}
+                        style={styles.pdfButton}
+                        onPress={() => handleOpenPdf(fileUrl)}
+                      >
+                        <Ionicons name="document-text" size={32} color="#2563EB" />
+                        <Text style={styles.pdfText} numberOfLines={1} ellipsizeMode="tail">
+                          {item.file_name || item.doctype || `PDF ${index + 1}`}
+                        </Text>
+                        <Text style={styles.filePathText} numberOfLines={1} ellipsizeMode="tail">
+                          {item.file_path}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                    <View style={{ alignItems: 'center' }}>
+                      <View style={styles.imageOverlay}>
+                        <Text style={styles.filePathText}>{item.file_path}</Text>
+                      </View>
+                      <TouchableOpacity
+                        key={`file-${index}`}
+                        style={[
+                          styles.imageContainer,
+                          Platform.OS !== 'web' && styles.imageContainerMobile
+                        ]}
+                        onPress={() => handleImagePress(fileUrl)}
+                      >
+                        <Image
+                          source={{ uri: fileUrl }}
+                          style={styles.imagePreview}
+                          resizeMode="cover"
+                        />
+                      </TouchableOpacity>
+                    </View>
+                    
+                    );
+                  })
+                }
+              </View>
+            ) : (
+              <Text style={styles.noDataText}>No documentation files available</Text>
+            )}
           </View>
-          <View style={styles.fileItemFooter}>
-            <Ionicons name="chevron-forward" size={24} color={COLORS.gray} />
-          </View>
-        </TouchableOpacity>
-      ))
-  ) : (
-    <Text style={styles.noDataText}>No document files available</Text>
-  )}
-</View>
-
         </>
       )}
     </View>
@@ -592,36 +743,72 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fileItemCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: RADIUS.md,
-    marginBottom: SPACING.sm,
-    padding: SPACING.md,
-    ...SHADOWS.light,
-  },
-  fileItemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingBottom: SPACING.xs,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
   },
-  fileItemId: {
+  closeButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 10,
+  },
+  fullImage: {
+    width: width * 0.9,
+    height: height * 0.8,
+  },
+  imageGallery: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: Platform.OS === 'web' ? 'space-between' : 'center',
+  },
+  imageContainer: {
+    width: width * 0.44,
+    height: width * 0.44,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.md,
+    overflow: 'hidden',
+    ...SHADOWS.medium,
+    position: 'relative',
+  },
+  imageContainerMobile: {
+    marginHorizontal: SPACING.xs,
+  },
+  imagePreview: {
+    width: '100%',
+    height: '100%',
+  },
+  imageOverlay: {
+    borderRadius: '3px',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    padding: 4,
+    marginBottom: '5px',
+  },
+  filePathText: {
+    fontSize: 10,
+    color: '#ffffff',
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  pdfButton: {
+    width: width * 0.44,
+    height: width * 0.35,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.md,
+    padding: SPACING.sm,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...SHADOWS.medium,
+    marginHorizontal: Platform.OS === 'web' ? 0 : SPACING.xs,
+  },
+  pdfText: {
+    marginTop: SPACING.xs,
     fontSize: SIZES.small,
-    fontWeight: 'bold',
-    color: '#2563EB',
-    flex: 0.3,
-  },
-  fileItemName: {
-    fontSize: SIZES.small,
-    color: COLORS.darkGray,
-    flex: 0.7,
-    textAlign: 'right',
-  },
-  fileItemFooter: {
-    paddingTop: SPACING.xs,
-    alignItems: 'flex-end',
+    textAlign: 'center',
+    color: '#1E3A8A',
   },
 });
 
