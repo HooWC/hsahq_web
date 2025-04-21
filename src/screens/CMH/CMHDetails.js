@@ -148,6 +148,86 @@ const CMHDetails = () => {
     setModalVisible(true);
   };
 
+  // Add new function to handle SO PDF generation and opening
+  const handleSOPdfGeneration = async (so_id) => {
+    try {
+      const token = Platform.OS === 'web'
+        ? window.localStorage.getItem('userToken')
+        : await AsyncStorage.getItem('userToken');
+      
+      // Call generate-so API
+      const response = await fetch(`${CONFIG.API_BASE_URL}/generate-so`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ so_id })
+      });
+      
+      const data = await response.json();
+      
+      if (data.pdf_path) {
+        // Construct PDF URL and open it
+        const pdfUrl = `rpt/pdf/${data.pdf_path}`;
+        handleOpenPdf(pdfUrl);
+      } else {
+        if (Platform.OS === 'web') {
+          window.alert('PDF not available');
+        } else {
+          Alert.alert('Error', 'PDF not available');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to generate SO PDF:', err);
+      if (Platform.OS === 'web') {
+        window.alert('Failed to generate PDF');
+      } else {
+        Alert.alert('Error', 'Failed to generate PDF');
+      }
+    }
+  };
+  
+  // Add new function to handle SQ PDF generation and opening
+  const handleSQPdfGeneration = async (quot_id) => {
+    try {
+      const token = Platform.OS === 'web'
+        ? window.localStorage.getItem('userToken')
+        : await AsyncStorage.getItem('userToken');
+      
+      // Call generate-sq API
+      const response = await fetch(`${CONFIG.API_BASE_URL}/generate-sq`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ sq_id: quot_id })
+      });
+      
+      const data = await response.json();
+      
+      if (data.pdf_path) {
+        // Construct PDF URL and open it
+        const pdfUrl = `rpt/pdf/${data.pdf_path}`;
+        handleOpenPdf(pdfUrl);
+      } else {
+        if (Platform.OS === 'web') {
+          window.alert('PDF not available');
+        } else {
+          Alert.alert('Error', 'PDF not available');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to generate SQ PDF:', err);
+      if (Platform.OS === 'web') {
+        window.alert('Failed to generate PDF');
+      } else {
+        Alert.alert('Error', 'Failed to generate PDF');
+      }
+    }
+  };
+
   useEffect(() => {
     const fetchAdditionalData = async () => {
       try {
@@ -285,32 +365,64 @@ const CMHDetails = () => {
 ) : (
   chassismhData && chassismhData.length > 0 ? (
     chassismhData.filter(item => item.chassismh_id).length > 0 ? ( // 确保至少有一个 item.chassismh_id
-      chassismhData
-        .filter(item => item.chassismh_id) // 过滤掉没有 chassismh_id 的数据
-        .map((chassisItem, index) => (
-          <TouchableOpacity
-            key={`chassis-${index}`}
-            style={styles.section}
-            onPress={() => navigation.navigate('ChassisItemDetail', { chassisItem })}
-          >
-            <View style={styles.chassisEntryHeader}>
-              <View>
-                <Text style={styles.chassisEntryTitle}>
-                  {chassisItem.chassismh_id}
-                </Text>
-                <Text style={styles.chassisEntryDate}>
-                {chassisItem.ddate ? (() => {
-    const date = new Date(chassisItem.ddate);
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')} ` +
-           `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
-})() : '-'}
-
-                </Text>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Movement Records</Text>
+        
+        <View style={styles.tableContainer}>
+          {/* Table Header */}
+          <View style={styles.tableHeader}>
+            <Text style={[styles.tableHeaderCell, { flex: 0.9 }]}>Date</Text>
+            <Text style={[styles.tableHeaderCell, { flex: 0.9 }]}>Location</Text>
+            <Text style={[styles.tableHeaderCell, { flex: 1.4 }]}>Info1</Text>
+            <Text style={[styles.tableHeaderCell, { flex: 1.4 }]}>Info2</Text>
+            <Text style={[styles.tableHeaderCell, { flex: 0.9 }]}>CreateBy</Text>
+          </View>
+          
+          {/* Table Rows */}
+          {chassismhData
+            .filter(item => item.chassismh_id)
+            .map((item, index) => (
+              <View key={`movement-${index}`} style={[
+                styles.tableRow,
+                index % 2 === 0 ? styles.tableRowEven : styles.tableRowOdd
+              ]}>
+                <View style={[styles.tableCell, { flex: 0.9 }]}>
+                  <Text style={styles.tableCellText} numberOfLines={2} adjustsFontSizeToFit>
+                    {item.ddate ? (() => {
+                      const date = new Date(item.ddate);
+                      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+                    })() : '-'}
+                  </Text>
+                </View>
+                
+                <View style={[styles.tableCell, { flex: 0.9 }]}>
+                  <Text style={styles.tableCellText} numberOfLines={2} adjustsFontSizeToFit>
+                    {item.location || '-'}
+                  </Text>
+                </View>
+                
+                <View style={[styles.tableCell, { flex: 1.4 }]}>
+                  <Text style={styles.tableCellText} numberOfLines={4}>
+                    {item.info1 || '-'}
+                  </Text>
+                </View>
+                
+                <View style={[styles.tableCell, { flex: 1.4 }]}>
+                  <Text style={styles.tableCellText} numberOfLines={4}>
+                    {item.info2 || '-'}
+                  </Text>
+                </View>
+                
+                <View style={[styles.tableCell, { flex: 0.9, borderRightWidth: 0 }]}>
+                  <Text style={styles.tableCellText} numberOfLines={2} adjustsFontSizeToFit>
+                    {item.createby || '-'}
+                  </Text>
+                </View>
               </View>
-              <Ionicons name="chevron-forward" size={24} color={COLORS.primary} />
-            </View>
-          </TouchableOpacity>
-        ))
+            ))
+          }
+        </View>
+      </View>
     ) : (
       <View style={styles.section}>
         <Text style={styles.noDataText}>No Movement Records</Text>
@@ -346,7 +458,7 @@ const CMHDetails = () => {
           <TouchableOpacity
             key={`quot-${index}`}
             style={styles.historyItem}
-            onPress={() => navigation.navigate('QuotDetail', { quotData: item })}
+            onPress={() => handleSQPdfGeneration(item.quot_id)}
           >
             <View style={styles.chassisEntryHeader}>
               <View>
@@ -390,7 +502,7 @@ const CMHDetails = () => {
           <TouchableOpacity
             key={`dsoi-${index}`}
             style={styles.historyItem}
-            onPress={() => navigation.navigate('SODetail', { soData: item })}
+            onPress={() => handleSOPdfGeneration(item.so_id)}
           >
             <View style={styles.chassisEntryHeader}>
               <View>
@@ -811,6 +923,57 @@ const styles = StyleSheet.create({
     fontSize: SIZES.small,
     textAlign: 'center',
     color: '#1E3A8A',
+  },
+  tableContainer: {
+    borderRadius: RADIUS.sm,
+    overflow: 'hidden',
+    ...SHADOWS.small,
+    marginHorizontal: 2,
+    marginBottom: SPACING.sm,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#E5E7EB',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    marginBottom: 0,
+  },
+  tableHeaderCell: {
+    fontSize: SIZES.small,
+    fontWeight: 'bold',
+    color: '#1E40AF',
+    padding: SPACING.xs,
+    textAlign: 'center',
+    paddingVertical: 12,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: '#D1D5DB',
+    minHeight: 40,
+  },
+  tableRowEven: {
+    backgroundColor: '#FFFFFF',
+  },
+  tableRowOdd: {
+    backgroundColor: '#F3F4F6',
+  },
+  tableCell: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    borderRightWidth: 1,
+    borderRightColor: '#D1D5DB',
+  },
+  tableCellText: {
+    fontSize: SIZES.ssmall,
+    color: '#374151',
+    flexWrap: 'wrap',
+    textAlign: 'center',
+    fontWeight: '500',
   },
 });
 

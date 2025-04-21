@@ -107,6 +107,7 @@ const PlanListing = () => {
   const [plans, setPlans] = useState([]);
   const [filteredPlans, setFilteredPlans] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
@@ -141,6 +142,10 @@ const PlanListing = () => {
         }
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
       const data = await response.json();
       
       // Update state based on whether we're appending or refreshing
@@ -152,6 +157,7 @@ const PlanListing = () => {
       
       // Check if we have more data to load
       setHasMore(data.length === pageSize);
+      setError(null);
       
     } catch (err) {
       console.error('Error:', err);
@@ -165,14 +171,15 @@ const PlanListing = () => {
 
   // 搜索函数: 用于API搜索或者本地过滤
   const searchPlans = async (query, type = 'general', isInitialSearch = true) => {
-    if (!query.trim()) {
+    if (!query.trim() && type !== 'combined') {
       return;
     }
 
     try {
       // 如果是初始搜索，则调用API获取数据
       if (isInitialSearch) {
-        setLoading(true);
+        setSearching(true);
+        setError(null);
         
         const token = Platform.OS === 'web'
           ? window.localStorage.getItem('userToken')
@@ -181,25 +188,34 @@ const PlanListing = () => {
         // 构建搜索URL
         let searchParam = '';
         if (advancedMode) {
-          switch(type) {
-            case 'model_id':
-              searchParam = `&search=${query}`;
-              break;
-            case 'body_type':
-              searchParam = `&body_type=${query}`;
-              break;
-            case 'wheelbase':
-              searchParam = `&wheelbase=${query}`;
-              break;
-            default:
-              searchParam = `&search=${query}`;
+          if (type === 'combined') {
+            // 对于组合搜索，先使用一个最宽泛的条件获取数据，然后在本地过滤
+            const mainParam = searchQuery.trim() ? `&search=${encodeURIComponent(searchQuery.trim())}` : 
+                             bodytypeQuery.trim() ? `&body_type=${encodeURIComponent(bodytypeQuery.trim())}` : 
+                             wheelbseQuery.trim() ? `&wheelbase=${encodeURIComponent(wheelbseQuery.trim())}` : '';
+            searchParam = mainParam;
+          } else {
+            switch(type) {
+              case 'model_id':
+                searchParam = `&search=${encodeURIComponent(query)}`;
+                break;
+              case 'body_type':
+                searchParam = `&body_type=${encodeURIComponent(query)}`;
+                break;
+              case 'wheelbase':
+                searchParam = `&wheelbase=${encodeURIComponent(query)}`;
+                break;
+              default:
+                searchParam = `&search=${encodeURIComponent(query)}`;
+            }
           }
         } else {
           // 简单模式
-          searchParam = `&search=${query}`;
+          searchParam = `&search=${encodeURIComponent(query)}`;
         }
 
-        const response = await fetch(`${CONFIG.API_BASE_URL}/plans?size=1000${searchParam}`, {
+        // Use pagination for better performance instead of size=1000
+        const response = await fetch(`${CONFIG.API_BASE_URL}/plans?page=1&size=${pageSize}${searchParam}`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -207,115 +223,169 @@ const PlanListing = () => {
           },
         });
 
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+
         const data = await response.json();
         
-        // 对于wheelbase搜索，即使是API搜索也要确保精确匹配
+        // 处理搜索结果
         let filteredData = data;
-        if (type === 'wheelbase' && !isNaN(query) && query.indexOf('.') === -1) {
+        
+        // 如果是组合搜索，需要在本地进行多条件筛选
+        if (type === 'combined') {
           filteredData = data.filter(item => {
-            // 处理 wheelbase 可能有 "3200 + 1400 mm" 这样的格式
-            const wheelbaseStr = item.wheelbase?.toString() || '';
+            let matchesAll = true;
             
-            // 处理方式1：如果 wheelbase 是单一数值（如 "3800"、"3800 mm"）
-            if (wheelbaseStr.match(/^\d+(\s*mm)?$/i)) {
-              const numericPart = parseInt(wheelbaseStr);
-              return numericPart === parseInt(query);
+            // 检查 Model ID
+            if (searchQuery.trim()) {
+              const matchesModelId = item.model_id?.toLowerCase().includes(searchQuery.trim().toLowerCase());
+              matchesAll = matchesAll && matchesModelId;
             }
             
-            // 处理方式2：如果 wheelbase 是组合值（如 "3200 + 1400 mm"）
-            // 只匹配第一个数字部分
-            const firstNumber = wheelbaseStr.match(/^\d+/);
-            if (firstNumber) {
-              return parseInt(firstNumber[0]) === parseInt(query);
+            // 检查 Body Type
+            if (bodytypeQuery.trim()) {
+              const matchesBodyType = item.body_type?.toLowerCase().includes(bodytypeQuery.trim().toLowerCase());
+              matchesAll = matchesAll && matchesBodyType;
             }
             
-            return false;
-          });
-        }
-        
-        setFilteredPlans(filteredData);
-        setSearchPerformed(true);
-        setHasMore(false); // 搜索时不使用分页
-      } 
-      // 如果不是初始搜索，就在已有的filteredPlans中过滤
-      else {
-        // 根据搜索类型过滤现有结果
-        let newFilteredResults = [...filteredPlans];
-        
-        switch(type) {
-          case 'model_id':
-            newFilteredResults = newFilteredResults.filter(item => 
-              item.model_id?.toLowerCase().includes(query.toLowerCase())
-            );
-            break;
-          case 'body_type':
-            newFilteredResults = newFilteredResults.filter(item => 
-              item.body_type?.toLowerCase().includes(query.toLowerCase())
-            );
-            break;
-          case 'wheelbase':
-            newFilteredResults = newFilteredResults.filter(item => {
+            // 检查 Wheelbase
+            if (wheelbseQuery.trim()) {
               // 如果用户输入了精确数值，则精确匹配
-              if (!isNaN(query) && query.indexOf('.') === -1) {
-                // 处理 wheelbase 可能有 "3200 + 1400 mm" 这样的格式
-                // 提取纯数字部分，忽略 "+ 1400 mm" 这样的后缀
+              if (!isNaN(wheelbseQuery) && wheelbseQuery.indexOf('.') === -1) {
                 const wheelbaseStr = item.wheelbase?.toString() || '';
                 
                 // 处理方式1：如果 wheelbase 是单一数值（如 "3800"、"3800 mm"）
                 if (wheelbaseStr.match(/^\d+(\s*mm)?$/i)) {
                   const numericPart = parseInt(wheelbaseStr);
-                  return numericPart === parseInt(query);
+                  const matchesWheelbase = numericPart === parseInt(wheelbseQuery);
+                  matchesAll = matchesAll && matchesWheelbase;
                 }
-                
-                // 处理方式2：如果 wheelbase 是组合值（如 "3200 + 1400 mm"）
-                // 只匹配第一个数字部分
-                const firstNumber = wheelbaseStr.match(/^\d+/);
-                if (firstNumber) {
-                  return parseInt(firstNumber[0]) === parseInt(query);
+                // 处理方式2：如果 wheelbase 是范围（如 "3800-4200"）
+                else if (wheelbaseStr.includes('-')) {
+                  const ranges = wheelbaseStr.split('-').map(part => parseInt(part.trim()));
+                  if (ranges.length === 2 && !isNaN(ranges[0]) && !isNaN(ranges[1])) {
+                    const userValue = parseInt(wheelbseQuery);
+                    const isInRange = userValue >= ranges[0] && userValue <= ranges[1];
+                    matchesAll = matchesAll && isInRange;
+                  } else {
+                    const matchesWheelbase = wheelbaseStr.toLowerCase().includes(wheelbseQuery.toLowerCase());
+                    matchesAll = matchesAll && matchesWheelbase;
+                  }
                 }
-                
-                return false;
+                // 处理方式3：其他情况，使用字符串包含
+                else {
+                  const matchesWheelbase = wheelbaseStr.toLowerCase().includes(wheelbseQuery.toLowerCase());
+                  matchesAll = matchesAll && matchesWheelbase;
+                }
               } else {
-                // 如果不是精确数值搜索，使用宽松匹配
-                return item.wheelbase?.toLowerCase().includes(query.toLowerCase());
+                // 如果用户输入的不是纯数字，则使用普通的字符串包含比较
+                const matchesWheelbase = item.wheelbase?.toLowerCase().includes(wheelbseQuery.toLowerCase());
+                matchesAll = matchesAll && matchesWheelbase;
               }
-            });
-            break;
-          default:
-            break;
+            }
+            
+            return matchesAll;
+          });
         }
         
-        setFilteredPlans(newFilteredResults);
+        if (type === 'combined') {
+          setFilteredPlans(filteredData);
+        } else {
+          setPlans(data);
+          setFilteredPlans([]);
+        }
+        
+        setSearchPerformed(true);
+        setError(null);
+        
+        // Check if we have more data available
+        setHasMore(data.length === pageSize && type !== 'combined');
+        setPage(1);
       }
     } catch (err) {
-      console.error('Error:', err);
-      setError('Failed to search data');
+      console.error('Search Error:', err);
+      setError('Failed to search data. Please try again.');
+      // Keep existing data visible when search fails
     } finally {
       setLoading(false);
+      setSearching(false);
+    }
+  };
+
+  // New function to load more search results
+  const loadMoreSearchResults = async () => {
+    if (!hasMore || loadingMore || !searchPerformed) return;
+    
+    try {
+      setLoadingMore(true);
+      
+      const token = Platform.OS === 'web'
+        ? window.localStorage.getItem('userToken')
+        : await AsyncStorage.getItem('userToken');
+
+      const nextPage = page + 1;
+      
+      // Determine which search is active
+      let searchParam = '';
+      if (!advancedMode && simpleSearchQuery) {
+        searchParam = `&search=${encodeURIComponent(simpleSearchQuery)}`;
+      } else if (advancedMode) {
+        if (searchQuery) searchParam = `&search=${encodeURIComponent(searchQuery)}`;
+        else if (bodytypeQuery) searchParam = `&body_type=${encodeURIComponent(bodytypeQuery)}`;
+        else if (wheelbseQuery) searchParam = `&wheelbase=${encodeURIComponent(wheelbseQuery)}`;
+      }
+
+      const response = await fetch(`${CONFIG.API_BASE_URL}/plans?page=${nextPage}&size=${pageSize}${searchParam}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.length < pageSize) {
+        setHasMore(false);
+      }
+      
+      setPlans(prevData => [...prevData, ...data]);
+      setPage(nextPage);
+      
+    } catch (err) {
+      console.error('Load more search results error:', err);
+      setError('Failed to load more results');
+    } finally {
+      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    fetchPlans(1, false);
+    fetchPlans();
   }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
-    setPage(1);
     setSearchPerformed(false);
     setSearchQuery('');
     setWheelbseQuery('');
     setBodyTypeQuery('');
     setSimpleSearchQuery('');
+    setFilteredPlans([]);
     fetchPlans(1, false);
   };
 
   const loadMoreData = () => {
-    if (!hasMore || loadingMore || refreshing || loading || searchQuery) return;
-    
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchPlans(nextPage, true);
+    if (searchPerformed) {
+      loadMoreSearchResults();
+    } else if (hasMore && !loadingMore) {
+      fetchPlans(page + 1, true);
+    }
   };
 
   // 切换搜索模式
@@ -353,28 +423,29 @@ const PlanListing = () => {
   };
 
   const executeSimpleSearch = () => {
-    if (simpleSearchQuery.trim()) {
-      searchPlans(simpleSearchQuery, 'general', true);
-    } else {
-      onRefresh();
-    }
+    setSimpleSearchQuery(searchQuery);
+    searchPlans(searchQuery, 'general');
   };
 
   const executeModelIdSearch = () => {
-    if (searchQuery.trim()) {
-      searchPlans(searchQuery, 'model_id', !searchPerformed);
-    }
+    searchPlans(searchQuery, 'model_id');
   };
 
   const executeBodyTypeSearch = () => {
-    if (bodytypeQuery.trim()) {
-      searchPlans(bodytypeQuery, 'body_type', !searchPerformed);
-    }
+    searchPlans(bodytypeQuery, 'body_type');
   };
 
   const executeWheelbseSearch = () => {
-    if (wheelbseQuery.trim()) {
-      searchPlans(wheelbseQuery, 'wheelbase', !searchPerformed);
+    searchPlans(wheelbseQuery, 'wheelbase');
+  };
+
+  const executeAdvancedSearch = () => {
+    // 检查是否至少有一个查询条件
+    const hasCondition = searchQuery.trim() || bodytypeQuery.trim() || wheelbseQuery.trim();
+    if (hasCondition) {
+      searchPlans('combined', 'combined');
+    } else {
+      setError('Please enter at least one search condition');
     }
   };
 
@@ -400,17 +471,17 @@ const PlanListing = () => {
     if (!loadingMore) return null;
     
     return (
-      <View style={styles.footerLoader}>
-        <ActivityIndicator size="small" color="#1E293B" />
-        <Text style={styles.footerText}>Loading more...</Text>
+      <View style={styles.loadMoreContainer}>
+        <ActivityIndicator size="small" color="#3B82F6" />
+        <Text style={styles.loadMoreText}>Loading more plans...</Text>
       </View>
     );
   };
 
-  if (loading && !refreshing) {
+  if (loading && !refreshing && !searching) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#1E293B" />
+        <ActivityIndicator size="large" color="#3B82F6" />
         <Text style={styles.loadingText}>Loading plans...</Text>
       </View>
     );
@@ -418,181 +489,171 @@ const PlanListing = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar backgroundColor="#0F172A" barStyle="light-content" />
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-      <LinearGradient
-        colors={['#0F172A', '#334155']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.header}
-      >
-        <View style={styles.headerContent}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Plan List</Text>
-          <View style={styles.headerRight}></View>
-        </View>
-      </LinearGradient>
-
-      {/* Search Mode Toggle */}
-      <View style={styles.modeToggleContainer}>
-        <TouchableOpacity 
-          style={styles.modeToggleButton} 
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons name="arrow-back" size={24} color="#1E293B" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Building Plans</Text>
+        <TouchableOpacity
+          style={styles.toggleButton}
           onPress={toggleSearchMode}
         >
-          <Ionicons name={advancedMode ? "options" : "options-outline"} size={20} color="#1E293B" />
-          <Text style={styles.modeToggleText}>
-            {advancedMode ? "Simple" : "Advanced"}
+          <Text style={styles.toggleButtonText}>
+            {advancedMode ? 'Simple Search' : 'Advanced Search'}
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Search Bars */}
-      <View style={styles.searchWrapper}>
-        {!advancedMode ? (
-          // Simple Search Mode
-          <View style={styles.searchContainer}>
-            <TouchableOpacity onPress={executeSimpleSearch}>
+      {/* Search Section */}
+      {advancedMode ? (
+        // Advanced search
+        <View style={styles.advancedSearchContainer}>
+          <View style={styles.searchRow}>
+            <Text style={styles.searchLabel}>Model ID:</Text>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by model ID"
+                value={searchQuery}
+                onChangeText={handleModelIdSearch}
+                placeholderTextColor="#94A3B8"
+                returnKeyType="search"
+                onSubmitEditing={executeModelIdSearch}
+                editable={!searching}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  style={styles.clearButton}
+                  disabled={searching}
+                >
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          
+          <View style={styles.searchRow}>
+            <Text style={styles.searchLabel}>Body Type:</Text>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by body type"
+                value={bodytypeQuery}
+                onChangeText={handleBodyTypeSearch}
+                placeholderTextColor="#94A3B8"
+                returnKeyType="search"
+                onSubmitEditing={executeBodyTypeSearch}
+                editable={!searching}
+              />
+              {bodytypeQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setBodyTypeQuery('')}
+                  style={styles.clearButton}
+                  disabled={searching}
+                >
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          
+          <View style={styles.searchRow}>
+            <Text style={styles.searchLabel}>Wheelbase:</Text>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Enter wheelbase"
+                value={wheelbseQuery}
+                onChangeText={handleWheelbseSearch}
+                placeholderTextColor="#94A3B8"
+                returnKeyType="search"
+                onSubmitEditing={executeWheelbseSearch}
+                editable={!searching}
+                keyboardType="number-pad"
+              />
+              {wheelbseQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setWheelbseQuery('')}
+                  style={styles.clearButton}
+                  disabled={searching}
+                >
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          
+          <View style={styles.advancedButtonsContainer}>
+            <TouchableOpacity
+              style={[styles.advancedButton, styles.searchButton]}
+              onPress={executeAdvancedSearch}
+              disabled={searching}
+            >
+              {searching ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Ionicons name="search" size={16} color="#FFFFFF" style={styles.buttonIcon} />
+                  <Text style={styles.buttonText}>Search</Text>
+                </>
+              )}
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.advancedButton, styles.resetButton]}
+              onPress={resetAllSearches}
+              disabled={searching}
+            >
+              <Ionicons name="refresh" size={16} color="#FFFFFF" style={styles.buttonIcon} />
+              <Text style={styles.buttonText}>Reset</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        // Simple search
+        <View style={styles.searchContainer}>
+          <View style={styles.simpleSearchInputContainer}>
+            <TouchableOpacity 
+              onPress={executeSimpleSearch}
+              disabled={searching}
+            >
               <Ionicons name="search" size={20} color="#64748B" />
             </TouchableOpacity>
             <TextInput
-              style={styles.searchInput}
-              placeholder="Search plan"
-              value={simpleSearchQuery}
+              style={styles.simpleSearchInput}
+              placeholder="Search plans by model ID"
+              value={searchQuery}
               onChangeText={handleSimpleSearch}
               placeholderTextColor="#64748B"
               returnKeyType="search"
+              onSubmitEditing={executeSimpleSearch}
+              editable={!searching}
             />
-            {simpleSearchQuery.length > 0 && (
+            {searchQuery.length > 0 && (
               <TouchableOpacity
                 onPress={() => {
-                  setSimpleSearchQuery('');
-                  resetAllSearches();
+                  setSearchQuery('');
+                  onRefresh();
                 }}
-                style={styles.clearButton}
+                style={styles.clearButtonSimple}
+                disabled={searching}
               >
                 <Ionicons name="close-circle" size={20} color="#64748B" />
               </TouchableOpacity>
             )}
+            {searching && (
+              <ActivityIndicator size="small" color="#3B82F6" style={styles.searchingIndicator} />
+            )}
           </View>
-        ) : (
-          // Advanced Search Mode
-          <>
-            {/* Model ID Search */}
-            <View style={[styles.searchContainer, { marginBottom: 8 }]}>
-              <TouchableOpacity onPress={executeModelIdSearch}>
-                <Ionicons name="search" size={20} color="#64748B" />
-              </TouchableOpacity>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search Model ID"
-                value={searchQuery}
-                onChangeText={handleModelIdSearch}
-                placeholderTextColor="#64748B"
-                returnKeyType="search"
-              />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setSearchQuery('');
-                    if (searchPerformed && (bodytypeQuery.trim() || wheelbseQuery.trim())) {
-                      if (bodytypeQuery.trim()) {
-                        searchPlans(bodytypeQuery, 'body_type', true);
-                      } else if (wheelbseQuery.trim()) {
-                        searchPlans(wheelbseQuery, 'wheelbase', true);
-                      }
-                    } else {
-                      resetAllSearches();
-                    }
-                  }}
-                  style={styles.clearButton}
-                >
-                  <Ionicons name="close-circle" size={20} color="#64748B" />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Body Type Search */}
-            <View style={[styles.searchContainer, { marginBottom: 8 }]}>
-              <TouchableOpacity onPress={executeBodyTypeSearch}>
-                <Ionicons name="search" size={20} color="#64748B" />
-              </TouchableOpacity>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search Body Type"
-                value={bodytypeQuery}
-                onChangeText={handleBodyTypeSearch}
-                placeholderTextColor="#64748B"
-                returnKeyType="search"
-              />
-              {bodytypeQuery.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setBodyTypeQuery('');
-                    if (searchPerformed && (searchQuery.trim() || wheelbseQuery.trim())) {
-                      if (searchQuery.trim()) {
-                        searchPlans(searchQuery, 'model_id', true);
-                      } else if (wheelbseQuery.trim()) {
-                        searchPlans(wheelbseQuery, 'wheelbase', true);
-                      }
-                    } else {
-                      resetAllSearches();
-                    }
-                  }}
-                  style={styles.clearButton}
-                >
-                  <Ionicons name="close-circle" size={20} color="#64748B" />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Wheelbase Search */}
-            <View style={styles.searchContainer}>
-              <TouchableOpacity onPress={executeWheelbseSearch}>
-                <Ionicons name="search" size={20} color="#64748B" />
-              </TouchableOpacity>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search Wheelbase"
-                value={wheelbseQuery}
-                onChangeText={handleWheelbseSearch}
-                placeholderTextColor="#64748B"
-                returnKeyType="search"
-              />
-              {wheelbseQuery.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setWheelbseQuery('');
-                    if (searchPerformed && (searchQuery.trim() || bodytypeQuery.trim())) {
-                      if (searchQuery.trim()) {
-                        searchPlans(searchQuery, 'model_id', true);
-                      } else if (bodytypeQuery.trim()) {
-                        searchPlans(bodytypeQuery, 'body_type', true);
-                      }
-                    } else {
-                      resetAllSearches();
-                    }
-                  }}
-                  style={styles.clearButton}
-                >
-                  <Ionicons name="close-circle" size={20} color="#64748B" />
-                </TouchableOpacity>
-              )}
-            </View>
-          </>
-        )}
-        
-        {/* Reset Button */}
-        {(searchQuery.length > 0 || wheelbseQuery.length > 0 || bodytypeQuery.length > 0 || simpleSearchQuery.length > 0) && (
-          <TouchableOpacity
-            style={styles.resetButton}
-            onPress={resetAllSearches}
-          >
-            <Text style={styles.resetButtonText}>Reset</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+        </View>
+      )}
 
       {/* Error Message */}
       {error && (
@@ -602,41 +663,40 @@ const PlanListing = () => {
         </View>
       )}
 
-      {/* List */}
+      {/* Results */}
       <FlatList
-        data={searchPerformed ? filteredPlans : plans}
+        data={filteredPlans.length > 0 ? filteredPlans : plans}
         renderItem={renderPlan}
-        keyExtractor={(item, index) => `${item.id || index}`}
+        keyExtractor={(item, index) => `${item?.plan_id || ''}_${index}`}
         contentContainerStyle={styles.listContainer}
-        refreshControl={
-          <RefreshControl 
-            refreshing={refreshing} 
-            onRefresh={onRefresh}
-            colors={['#1E293B']} 
-            progressBackgroundColor="#f1f5f9"
-          />
-        }
-        showsVerticalScrollIndicator={false}
+        ListFooterComponent={renderFooter}
         onEndReached={loadMoreData}
         onEndReachedThreshold={0.5}
-        ListFooterComponent={renderFooter}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#3B82F6']}
+          />
+        }
         ListEmptyComponent={
-          !error && (
+          !loading && !searching && !error ? (
             <View style={styles.emptyContainer}>
-              <Ionicons name="document-text-outline" size={60} color="#94a3b8" />
-              <Text style={styles.emptyText}>
-                {searchPerformed
-                  ? "No matching plans found" 
-                  : "No plan found"}
-              </Text>
+              <Ionicons name="clipboard" size={60} color="#94A3B8" />
+              <Text style={styles.emptyText}>No plans found</Text>
               <TouchableOpacity 
-                style={[styles.emptyButton, { backgroundColor: '#1E293B' }]} 
+                style={styles.emptyButton}
                 onPress={onRefresh}
               >
                 <Text style={styles.emptyButtonText}>Refresh</Text>
               </TouchableOpacity>
             </View>
-          )
+          ) : searching ? (
+            <View style={styles.searchingContainer}>
+              <ActivityIndicator size="large" color="#3B82F6" />
+              <Text style={styles.searchingText}>Searching...</Text>
+            </View>
+          ) : null
         }
       />
     </View>
@@ -857,11 +917,22 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: RADIUS.md,
-    alignSelf: 'center',
-    marginTop: 8,
+    marginLeft: 10,
     ...SHADOWS.small,
   },
-  resetButtonText: {
+  searchButton: {
+    backgroundColor: '#1E293B',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: RADIUS.md,
+    ...SHADOWS.small,
+  },
+  buttonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  buttonText: {
     color: '#FFFFFF',
     fontSize: SIZES.small,
     fontWeight: '600',
@@ -886,6 +957,103 @@ const styles = StyleSheet.create({
     fontSize: SIZES.small,
     color: '#1E293B',
     fontWeight: '600',
+  },
+  searchingContainer: {
+    padding: SPACING.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchingText: {
+    marginTop: SPACING.md,
+    fontSize: SIZES.medium,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  searchingIndicator: {
+    marginLeft: SPACING.sm,
+  },
+  loadMoreContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: SPACING.md,
+  },
+  loadMoreText: {
+    marginLeft: SPACING.sm,
+    color: '#64748B',
+    fontSize: SIZES.small,
+  },
+  header: {
+    height: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    ...SHADOWS.medium,
+  },
+  toggleButton: {
+    padding: SPACING.xs,
+  },
+  toggleButtonText: {
+    fontSize: SIZES.small,
+    color: '#1E293B',
+    fontWeight: '600',
+  },
+  advancedSearchContainer: {
+    padding: SPACING.md,
+  },
+  searchRow: {
+    marginBottom: SPACING.md,
+  },
+  searchLabel: {
+    fontSize: SIZES.small,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.lg,
+    ...SHADOWS.small,
+  },
+  clearButton: {
+    padding: SPACING.xs,
+  },
+  advancedButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  advancedButton: {
+    backgroundColor: '#F1F5F9',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: RADIUS.md,
+    marginHorizontal: 4,
+    ...SHADOWS.small,
+  },
+  buttonIcon: {
+    marginRight: 4,
+  },
+  simpleSearchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.lg,
+    ...SHADOWS.small,
+  },
+  simpleSearchInput: {
+    flex: 1,
+    height: 46,
+    marginLeft: SPACING.sm,
+    fontSize: SIZES.medium,
+    color: '#1E293B',
+    outlineStyle: 'none',
+  },
+  clearButtonSimple: {
+    padding: SPACING.xs,
   },
 });
 

@@ -18,6 +18,7 @@ export const COLORS = {
 
 // Typography sizing
 export const SIZES = {
+  ssmall: 9,
   small: 12,
   medium: 14,
   large: 16,

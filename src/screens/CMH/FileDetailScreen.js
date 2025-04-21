@@ -91,7 +91,7 @@ const FileDetailScreen = () => {
     }
     
     // 为了调试
-    console.log('处理后的图片路径:', formattedPath);
+    // console.log('处理后的图片路径:', formattedPath);
     
     // 统一返回相对路径，对于web和移动端都使用相同格式
     return formattedPath;

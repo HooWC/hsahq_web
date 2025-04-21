@@ -139,6 +139,7 @@ const CMHListing = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [cmhData, setCmhData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
@@ -168,6 +169,10 @@ const CMHListing = () => {
         }
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
       const data = await response.json();
       //console.log('CMH data:', data);
       
@@ -184,6 +189,7 @@ const CMHListing = () => {
       }
       
       setPage(pageNum);
+      setError(null);
     } catch (err) {
       console.error('Error:', err);
       setError('Failed to get data');
@@ -222,15 +228,15 @@ const CMHListing = () => {
     }
 
     try {
-      setLoading(true);
-      setCmhData([]);
+      setSearching(true);
+      setError(null);
       
       const token = Platform.OS === 'web'
         ? window.localStorage.getItem('userToken')
         : await AsyncStorage.getItem('userToken');
 
-      // Using the API endpoint to search all data in the database, not just loaded data
-      const response = await fetch(`${CONFIG.API_BASE_URL}/cmh?search=${searchQuery}&size=1000`, {
+      // Using the API endpoint to search with pagination for better performance
+      const response = await fetch(`${CONFIG.API_BASE_URL}/cmh?search=${encodeURIComponent(searchQuery)}&page=1&size=${pageSize}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -238,17 +244,65 @@ const CMHListing = () => {
         }
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
       const data = await response.json();
+      
+      // Only update data after successful fetch
       setCmhData(data);
+      
       // Update pagination state for search results
-      setHasMoreData(false); // Disable pagination for search results
+      setHasMoreData(data.length === pageSize);
       setPage(1); // Reset page number
       
     } catch (err) {
-      console.error('Error:', err);
-      setError('Failed to search data');
+      console.error('Search Error:', err);
+      setError('Failed to search data. Please try again.');
     } finally {
-      setLoading(false);
+      setSearching(false);
+    }
+  };
+
+  // Safe search load more function
+  const loadMoreSearchResults = async () => {
+    if (!hasMoreData || loadingMore || !searchQuery.trim()) return;
+    
+    try {
+      setLoadingMore(true);
+      
+      const token = Platform.OS === 'web'
+        ? window.localStorage.getItem('userToken')
+        : await AsyncStorage.getItem('userToken');
+
+      const nextPage = page + 1;
+      const response = await fetch(`${CONFIG.API_BASE_URL}/cmh?search=${encodeURIComponent(searchQuery)}&page=${nextPage}&size=${pageSize}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.length < pageSize) {
+        setHasMoreData(false);
+      }
+      
+      setCmhData(prevData => [...prevData, ...data]);
+      setPage(nextPage);
+      
+    } catch (err) {
+      console.error('Load more search results error:', err);
+      setError('Failed to load more results');
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -301,7 +355,10 @@ const CMHListing = () => {
       {/* Search Bar */}
       <View style={styles.searchWrapper}>
         <View style={styles.searchContainer}>
-          <TouchableOpacity onPress={executeSearch}>
+          <TouchableOpacity 
+            onPress={executeSearch}
+            disabled={searching}
+          >
             <Ionicons name="search" size={20} color="#64748B" />
           </TouchableOpacity>
           <TextInput
@@ -312,6 +369,7 @@ const CMHListing = () => {
             placeholderTextColor="#64748B"
             onSubmitEditing={executeSearch}
             returnKeyType="search"
+            editable={!searching}
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity
@@ -320,9 +378,13 @@ const CMHListing = () => {
                 onRefresh();
               }}
               style={styles.clearButton}
+              disabled={searching}
             >
               <Ionicons name="close-circle" size={20} color="#64748B" />
             </TouchableOpacity>
+          )}
+          {searching && (
+            <ActivityIndicator size="small" color="#3B82F6" style={styles.searchingIndicator} />
           )}
         </View>
       </View>
@@ -349,11 +411,11 @@ const CMHListing = () => {
           />
         }
         ListFooterComponent={renderFooter}
-        onEndReached={loadMoreData}
+        onEndReached={searchQuery.trim() ? loadMoreSearchResults : loadMoreData}
         onEndReachedThreshold={0.5}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          !error && (
+          !loading && !searching && !error ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="car" size={60} color="#94A3B8" />
               <Text style={styles.emptyText}>No chassis movement records found</Text>
@@ -364,7 +426,12 @@ const CMHListing = () => {
                 <Text style={styles.emptyButtonText}>Refresh</Text>
               </TouchableOpacity>
             </View>
-          )
+          ) : searching ? (
+            <View style={styles.searchingContainer}>
+              <ActivityIndicator size="large" color="#3B82F6" />
+              <Text style={styles.searchingText}>Searching...</Text>
+            </View>
+          ) : null
         }
       />
     </View>
@@ -387,6 +454,20 @@ const styles = StyleSheet.create({
     fontSize: SIZES.medium,
     color: '#64748B',
     fontWeight: '500',
+  },
+  searchingContainer: {
+    padding: SPACING.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchingText: {
+    marginTop: SPACING.md,
+    fontSize: SIZES.medium,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  searchingIndicator: {
+    marginLeft: SPACING.sm,
   },
   header: {
     height: 60,

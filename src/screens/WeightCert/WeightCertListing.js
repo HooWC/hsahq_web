@@ -106,13 +106,20 @@ const WeightCertItem = ({ item, index, navigation }) => {
 const WeightCertListing = () => {
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState('');
+  const [wheelbaseQuery, setWheelbaseQuery] = useState('');
+  const [axleQuery, setAxleQuery] = useState('');
   const [weightCerts, setWeightCerts] = useState([]);
+  const [filteredCerts, setFilteredCerts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(false);
+  const [searchPerformed, setSearchPerformed] = useState(false);
+  const [simpleSearchQuery, setSimpleSearchQuery] = useState('');
   const pageSize = 100;
 
   const fetchWeightCerts = async (pageNum = 1, shouldAppend = false) => {
@@ -140,6 +147,10 @@ const WeightCertListing = () => {
         },
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
       const data = await response.json();
       
       // Update state based on whether we're appending or refreshing
@@ -151,6 +162,7 @@ const WeightCertListing = () => {
       
       // Check if we have more data to load
       setHasMore(data.length === pageSize);
+      setError(null);
       
     } catch (err) {
       console.error('Error:', err);
@@ -163,8 +175,8 @@ const WeightCertListing = () => {
   };
 
   // Search function that uses the API endpoint
-  const searchWeightCerts = async (query) => {
-    if (!query.trim()) {
+  const searchWeightCerts = async (query, type = 'general', isInitialSearch = true) => {
+    if (!query.trim() && type !== 'combined') {
       // If search is empty, reset to first page of data
       setPage(1);
       fetchWeightCerts(1, false);
@@ -172,81 +184,280 @@ const WeightCertListing = () => {
     }
 
     try {
-      setLoading(true);
+      // 如果是初始搜索，则调用API获取数据
+      if (isInitialSearch) {
+        setSearching(true);
+        setError(null);
+        
+        const token = Platform.OS === 'web'
+          ? window.localStorage.getItem('userToken')
+          : await AsyncStorage.getItem('userToken');
+
+        // 构建搜索URL
+        let searchParam = '';
+        if (advancedMode) {
+          if (type === 'combined') {
+            // 对于组合搜索，先使用一个最宽泛的条件获取数据，然后在本地过滤
+            const mainParam = searchQuery.trim() ? `&search=${encodeURIComponent(searchQuery.trim())}` : 
+                            wheelbaseQuery.trim() ? `&wheelbase=${encodeURIComponent(wheelbaseQuery.trim())}` : 
+                            axleQuery.trim() ? `&axle=${encodeURIComponent(axleQuery.trim())}` : '';
+            searchParam = mainParam;
+          } else {
+            switch(type) {
+              case 'model_id':
+                searchParam = `&search=${encodeURIComponent(query)}`;
+                break;
+              case 'wheelbase':
+                searchParam = `&wheelbase=${encodeURIComponent(query)}`;
+                break;
+              case 'axle':
+                searchParam = `&axle=${encodeURIComponent(query)}`;
+                break;
+              default:
+                searchParam = `&search=${encodeURIComponent(query)}`;
+            }
+          }
+        } else {
+          // 简单模式
+          searchParam = `&search=${encodeURIComponent(query)}`;
+        }
+
+        // Use pagination for better performance instead of size=1000
+        const response = await fetch(`${CONFIG.API_BASE_URL}/weightCerts?page=1&size=${pageSize}${searchParam}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // 处理搜索结果
+        let filteredData = data;
+        
+        // 如果是组合搜索，需要在本地进行多条件筛选
+        if (type === 'combined') {
+          filteredData = data.filter(item => {
+            let matchesAll = true;
+            
+            // 检查 Model ID
+            if (searchQuery.trim()) {
+              const matchesModelId = item.model_id?.toLowerCase().includes(searchQuery.trim().toLowerCase());
+              matchesAll = matchesAll && matchesModelId;
+            }
+            
+            // 检查 Wheelbase
+            if (wheelbaseQuery.trim()) {
+              const matchesWheelbase = item.wheelbase?.toLowerCase().includes(wheelbaseQuery.trim().toLowerCase());
+              matchesAll = matchesAll && matchesWheelbase;
+            }
+            
+            // 检查 Axle
+            if (axleQuery.trim()) {
+              const matchesAxle = item.axle?.toLowerCase().includes(axleQuery.trim().toLowerCase());
+              matchesAll = matchesAll && matchesAxle;
+            }
+            
+            return matchesAll;
+          });
+        }
+        
+        if (type === 'combined') {
+          setFilteredCerts(filteredData);
+        } else {
+          setWeightCerts(data);
+          setFilteredCerts([]);
+        }
+        
+        setSearchPerformed(true);
+        setError(null);
+        
+        // Check if we have more data available
+        setHasMore(data.length === pageSize && type !== 'combined');
+        setPage(1);
+      }
+    } catch (err) {
+      console.error('Search Error:', err);
+      setError('Failed to search data. Please try again.');
+      // Keep existing data visible when search fails
+    } finally {
+      setLoading(false);
+      setSearching(false);
+    }
+  };
+
+  // New function to load more search results
+  const loadMoreSearchResults = async () => {
+    if (!hasMore || loadingMore || !searchPerformed) return;
+    
+    try {
+      setLoadingMore(true);
       
       const token = Platform.OS === 'web'
         ? window.localStorage.getItem('userToken')
         : await AsyncStorage.getItem('userToken');
 
-      const response = await fetch(`${CONFIG.API_BASE_URL}/weightCerts?search=${query}`, {
+      const nextPage = page + 1;
+      
+      // Determine which search is active
+      let searchParam = '';
+      if (!advancedMode && simpleSearchQuery) {
+        searchParam = `&search=${encodeURIComponent(simpleSearchQuery)}`;
+      } else if (advancedMode) {
+        if (searchQuery) searchParam = `&search=${encodeURIComponent(searchQuery)}`;
+        else if (wheelbaseQuery) searchParam = `&wheelbase=${encodeURIComponent(wheelbaseQuery)}`;
+        else if (axleQuery) searchParam = `&axle=${encodeURIComponent(axleQuery)}`;
+      }
+
+      const response = await fetch(`${CONFIG.API_BASE_URL}/weightCerts?page=${nextPage}&size=${pageSize}${searchParam}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
-        },
+        }
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
       const data = await response.json();
-      setWeightCerts(data);
-      setHasMore(false); // When searching, we don't implement pagination
+      
+      if (data.length < pageSize) {
+        setHasMore(false);
+      }
+      
+      setWeightCerts(prevData => [...prevData, ...data]);
+      setPage(nextPage);
       
     } catch (err) {
-      console.error('Error:', err);
-      setError('Failed to search data');
+      console.error('Load more search results error:', err);
+      setError('Failed to load more results');
     } finally {
-      setLoading(false);
+      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    fetchWeightCerts(1, false);
+    fetchWeightCerts();
   }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
-    setPage(1);
+    setSearchPerformed(false);
+    setSearchQuery('');
+    setWheelbaseQuery('');
+    setAxleQuery('');
+    setSimpleSearchQuery('');
+    setFilteredCerts([]);
     fetchWeightCerts(1, false);
   };
 
   const loadMoreData = () => {
-    if (!hasMore || loadingMore || refreshing || loading || searchQuery) return;
-    
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchWeightCerts(nextPage, true);
+    if (searchPerformed) {
+      loadMoreSearchResults();
+    } else if (hasMore && !loadingMore) {
+      fetchWeightCerts(page + 1, true);
+    }
   };
 
-  const handleSearch = (text) => {
+  const toggleSearchMode = () => {
+    setAdvancedMode(!advancedMode);
+    
+    // When toggling, reset all search fields and results
+    setSearchQuery('');
+    setWheelbaseQuery('');
+    setAxleQuery('');
+    setSimpleSearchQuery('');
+    
+    if (searchPerformed) {
+      setSearchPerformed(false);
+      setFilteredCerts([]);
+      fetchWeightCerts(1, false);
+    }
+  };
+
+  const handleSimpleSearch = (text) => {
     setSearchQuery(text);
   };
-  
-  const executeSearch = () => {
-    searchWeightCerts(searchQuery);
+
+  const handleModelIdSearch = (text) => {
+    setSearchQuery(text);
   };
 
-  // 修改renderWeightCert，使用独立的组件
+  const handleWheelbaseSearch = (text) => {
+    setWheelbaseQuery(text);
+  };
+
+  const handleAxleSearch = (text) => {
+    setAxleQuery(text);
+  };
+
+  const executeSimpleSearch = () => {
+    setSimpleSearchQuery(searchQuery);
+    searchWeightCerts(searchQuery, 'general');
+  };
+
+  const executeModelIdSearch = () => {
+    searchWeightCerts(searchQuery, 'model_id');
+  };
+
+  const executeWheelbaseSearch = () => {
+    searchWeightCerts(wheelbaseQuery, 'wheelbase');
+  };
+
+  const executeAxleSearch = () => {
+    searchWeightCerts(axleQuery, 'axle');
+  };
+
+  const executeAdvancedSearch = () => {
+    // 检查是否至少有一个查询条件
+    const hasCondition = searchQuery.trim() || wheelbaseQuery.trim() || axleQuery.trim();
+    if (hasCondition) {
+      searchWeightCerts('combined', 'combined');
+    } else {
+      setError('Please enter at least one search condition');
+    }
+  };
+
+  const resetAllSearches = () => {
+    setSearchQuery('');
+    setWheelbaseQuery('');
+    setAxleQuery('');
+    setSimpleSearchQuery('');
+    
+    if (searchPerformed) {
+      setSearchPerformed(false);
+      setFilteredCerts([]);
+      fetchWeightCerts(1, false); 
+    }
+  };
+
   const renderWeightCert = ({ item, index }) => {
-    if (!item) return null;
     return <WeightCertItem item={item} index={index} navigation={navigation} />;
   };
 
-  // Render footer with loading indicator when loading more data
   const renderFooter = () => {
     if (!loadingMore) return null;
     
     return (
-      <View style={styles.footerLoader}>
+      <View style={styles.loadMoreContainer}>
         <ActivityIndicator size="small" color="#F43F5E" />
-        <Text style={styles.footerText}>Loading more...</Text>
+        <Text style={styles.loadMoreText}>Loading more certificates...</Text>
       </View>
     );
   };
 
-  if (loading && !refreshing) {
+  if (loading && !refreshing && !searching) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#EF4444" />
-        <Text style={styles.loadingText}>Loading certificates...</Text>
+        <ActivityIndicator size="large" color="#F43F5E" />
+        <Text style={styles.loadingText}>Loading weight certificates...</Text>
       </View>
     );
   }
@@ -269,36 +480,159 @@ const WeightCertListing = () => {
           <Ionicons name="arrow-back" size={24} color={COLORS.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Weight Certificates</Text>
+        <TouchableOpacity
+          style={styles.toggleButton}
+          onPress={toggleSearchMode}
+        >
+          <Text style={styles.toggleButtonText}>
+            {advancedMode ? 'Simple Search' : 'Advanced Search'}
+          </Text>
+        </TouchableOpacity>
       </LinearGradient>
 
-      {/* Search Bar */}
-      <View style={styles.searchWrapper}>
-        <View style={styles.searchContainer}>
-          <TouchableOpacity onPress={executeSearch}>
-            <Ionicons name="search" size={20} color="#64748B" />
-          </TouchableOpacity>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search"
-            value={searchQuery}
-            onChangeText={handleSearch}
-            placeholderTextColor="#64748B"
-            onSubmitEditing={executeSearch}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
+      {/* Search Section */}
+      {advancedMode ? (
+        // Advanced search
+        <View style={styles.advancedSearchContainer}>
+          <View style={styles.searchRow}>
+            <Text style={styles.searchLabel}>Model ID:</Text>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by model ID"
+                value={searchQuery}
+                onChangeText={handleModelIdSearch}
+                placeholderTextColor="#94A3B8"
+                returnKeyType="search"
+                onSubmitEditing={executeModelIdSearch}
+                editable={!searching}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  style={styles.clearButton}
+                  disabled={searching}
+                >
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          
+          <View style={styles.searchRow}>
+            <Text style={styles.searchLabel}>Wheelbase:</Text>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by wheelbase"
+                value={wheelbaseQuery}
+                onChangeText={handleWheelbaseSearch}
+                placeholderTextColor="#94A3B8"
+                returnKeyType="search"
+                onSubmitEditing={executeWheelbaseSearch}
+                editable={!searching}
+              />
+              {wheelbaseQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setWheelbaseQuery('')}
+                  style={styles.clearButton}
+                  disabled={searching}
+                >
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          
+          <View style={styles.searchRow}>
+            <Text style={styles.searchLabel}>Axle:</Text>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by axle"
+                value={axleQuery}
+                onChangeText={handleAxleSearch}
+                placeholderTextColor="#94A3B8"
+                returnKeyType="search"
+                onSubmitEditing={executeAxleSearch}
+                editable={!searching}
+              />
+              {axleQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setAxleQuery('')}
+                  style={styles.clearButton}
+                  disabled={searching}
+                >
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          
+          <View style={styles.advancedButtonsContainer}>
             <TouchableOpacity
-              onPress={() => {
-                setSearchQuery('');
-                onRefresh();
-              }}
-              style={styles.clearButton}
+              style={[styles.advancedButton, styles.searchButton]}
+              onPress={executeAdvancedSearch}
+              disabled={searching}
             >
-              <Ionicons name="close-circle" size={20} color="#64748B" />
+              {searching ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Ionicons name="search" size={16} color="#FFFFFF" style={styles.buttonIcon} />
+                  <Text style={styles.buttonText}>Search</Text>
+                </>
+              )}
             </TouchableOpacity>
-          )}
+            
+            <TouchableOpacity
+              style={[styles.advancedButton, styles.resetButton]}
+              onPress={resetAllSearches}
+              disabled={searching}
+            >
+              <Ionicons name="refresh" size={16} color="#FFFFFF" style={styles.buttonIcon} />
+              <Text style={styles.buttonText}>Reset</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      ) : (
+        // Simple search
+        <View style={styles.searchContainer}>
+          <View style={styles.simpleSearchInputContainer}>
+            <TouchableOpacity 
+              onPress={executeSimpleSearch}
+              disabled={searching}
+            >
+              <Ionicons name="search" size={20} color="#64748B" />
+            </TouchableOpacity>
+            <TextInput
+              style={styles.simpleSearchInput}
+              placeholder="Search certificates by model ID"
+              value={searchQuery}
+              onChangeText={handleSimpleSearch}
+              placeholderTextColor="#64748B"
+              returnKeyType="search"
+              onSubmitEditing={executeSimpleSearch}
+              editable={!searching}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  setSearchQuery('');
+                  onRefresh();
+                }}
+                style={styles.clearButtonSimple}
+                disabled={searching}
+              >
+                <Ionicons name="close-circle" size={20} color="#64748B" />
+              </TouchableOpacity>
+            )}
+            {searching && (
+              <ActivityIndicator size="small" color="#F43F5E" style={styles.searchingIndicator} />
+            )}
+          </View>
+        </View>
+      )}
 
       {/* Error Message */}
       {error && (
@@ -308,25 +642,24 @@ const WeightCertListing = () => {
         </View>
       )}
 
-      {/* List */}
+      {/* Results */}
       <FlatList
-        data={weightCerts}
+        data={filteredCerts.length > 0 ? filteredCerts : weightCerts}
         renderItem={renderWeightCert}
-        keyExtractor={(item, index) => `${item.id || index}`}
+        keyExtractor={(item, index) => `${item?.id || ''}_${index}`}
         contentContainerStyle={styles.listContainer}
-        refreshControl={
-          <RefreshControl 
-            refreshing={refreshing} 
-            onRefresh={onRefresh}
-            colors={['#EF4444']} 
-          />
-        }
-        showsVerticalScrollIndicator={false}
+        ListFooterComponent={renderFooter}
         onEndReached={loadMoreData}
         onEndReachedThreshold={0.5}
-        ListFooterComponent={renderFooter}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#F43F5E']}
+          />
+        }
         ListEmptyComponent={
-          !error && (
+          !loading && !searching && !error ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="document-text" size={60} color="#94A3B8" />
               <Text style={styles.emptyText}>No weight certificates found</Text>
@@ -337,7 +670,12 @@ const WeightCertListing = () => {
                 <Text style={styles.emptyButtonText}>Refresh</Text>
               </TouchableOpacity>
             </View>
-          )
+          ) : searching ? (
+            <View style={styles.searchingContainer}>
+              <ActivityIndicator size="large" color="#F43F5E" />
+              <Text style={styles.searchingText}>Searching...</Text>
+            </View>
+          ) : null
         }
       />
     </View>
@@ -536,7 +874,143 @@ const styles = StyleSheet.create({
     marginLeft: SPACING.sm,
     color: '#64748B',
     fontSize: SIZES.small,
-  }
+  },
+  resetButton: {
+    backgroundColor: '#F43F5E',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: RADIUS.md,
+    marginLeft: 10,
+    ...SHADOWS.small,
+  },
+  searchButton: {
+    backgroundColor: '#F43F5E',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: RADIUS.md,
+    ...SHADOWS.small,
+  },
+  buttonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: SIZES.small,
+    fontWeight: '600',
+  },
+  modeToggleContainer: {
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.md,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  modeToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: RADIUS.md,
+    ...SHADOWS.small,
+  },
+  modeToggleText: {
+    marginLeft: 4,
+    fontSize: SIZES.small,
+    color: '#1E293B',
+    fontWeight: '600',
+  },
+  searchingContainer: {
+    padding: SPACING.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchingText: {
+    marginTop: SPACING.md,
+    fontSize: SIZES.medium,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  searchingIndicator: {
+    marginLeft: SPACING.sm,
+  },
+  loadMoreContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: SPACING.md,
+  },
+  loadMoreText: {
+    marginLeft: SPACING.sm,
+    color: '#64748B',
+    fontSize: SIZES.small,
+  },
+  toggleButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.sm,
+  },
+  toggleButtonText: {
+    color: COLORS.white,
+    fontSize: SIZES.small,
+    fontWeight: '600',
+  },
+  advancedSearchContainer: {
+    padding: SPACING.md,
+  },
+  searchRow: {
+    marginBottom: SPACING.md,
+  },
+  searchLabel: {
+    fontSize: SIZES.small,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.lg,
+    ...SHADOWS.small,
+  },
+  clearButton: {
+    padding: SPACING.xs,
+  },
+  advancedButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  advancedButton: {
+    backgroundColor: '#F1F5F9',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: RADIUS.md,
+    marginHorizontal: 4,
+    ...SHADOWS.small,
+  },
+  simpleSearchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.white,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.lg,
+    ...SHADOWS.small,
+  },
+  simpleSearchInput: {
+    flex: 1,
+    height: 46,
+    marginLeft: SPACING.sm,
+    fontSize: SIZES.medium,
+    color: '#1E293B',
+    outlineStyle: 'none',
+  },
+  clearButtonSimple: {
+    padding: SPACING.xs,
+  },
 });
 
 export default WeightCertListing; 
