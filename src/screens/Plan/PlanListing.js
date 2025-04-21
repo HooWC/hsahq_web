@@ -20,11 +20,10 @@ import CONFIG from '../../constants/config';
 import { COLORS, SPACING, SIZES, SHADOWS, RADIUS } from '../../constants/theme';
 
 // 提取成单独的组件，这样就可以在组件内部使用hooks
-const PlanItem = ({ item, index, navigation }) => {
+const PlanItem = React.memo(({ item, index, navigation }) => {
   const itemFadeAnim = React.useRef(new Animated.Value(0)).current;
   
   React.useEffect(() => {
-    // 为每个项目单独设置动画
     Animated.timing(itemFadeAnim, {
       toValue: 1,
       duration: 300,
@@ -97,7 +96,7 @@ const PlanItem = ({ item, index, navigation }) => {
       </TouchableOpacity>
     </Animated.View>
   );
-};
+});
 
 const PlanListing = () => {
   const navigation = useNavigation();
@@ -388,36 +387,35 @@ const PlanListing = () => {
     }
   };
 
-  // 切换搜索模式
   const toggleSearchMode = () => {
-    const newMode = !advancedMode;
-    setAdvancedMode(newMode);
+    setAdvancedMode(!advancedMode);
     
-    // 重置所有搜索状态
+    // Reset all search fields and results when toggling
     setSearchQuery('');
     setWheelbseQuery('');
     setBodyTypeQuery('');
     setSimpleSearchQuery('');
-    setSearchPerformed(false);
-    setFilteredPlans([]);
     
-    // 刷新数据
-    onRefresh();
+    if (searchPerformed) {
+      setSearchPerformed(false);
+      setFilteredPlans([]);
+      fetchPlans(1, false);
+    }
   };
 
-  // 处理各种搜索输入的变化
+  // Simplified input handlers - just update state, no searching
   const handleSimpleSearch = (text) => {
-    setSimpleSearchQuery(text);
+    setSearchQuery(text);
   };
 
   const handleModelIdSearch = (text) => {
     setSearchQuery(text);
   };
-  
+
   const handleWheelbseSearch = (text) => {
     setWheelbseQuery(text);
   };
-  
+
   const handleBodyTypeSearch = (text) => {
     setBodyTypeQuery(text);
   };
@@ -449,15 +447,17 @@ const PlanListing = () => {
     }
   };
 
-  // 重置搜索
   const resetAllSearches = () => {
     setSearchQuery('');
     setWheelbseQuery('');
     setBodyTypeQuery('');
     setSimpleSearchQuery('');
-    setSearchPerformed(false);
-    setFilteredPlans([]);
-    onRefresh();
+    
+    if (searchPerformed) {
+      setSearchPerformed(false);
+      setFilteredPlans([]);
+      fetchPlans(1, false); 
+    }
   };
 
   // 使用单独的组件
@@ -492,23 +492,28 @@ const PlanListing = () => {
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       {/* Header */}
-      <View style={styles.header}>
+      <LinearGradient
+        colors={['#0F172A', '#334155']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.header}
+      >
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Ionicons name="arrow-back" size={24} color="#1E293B" />
+          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Building Plans</Text>
+        <Text style={styles.headerTitleLight}>Building Plans</Text>
         <TouchableOpacity
-          style={styles.toggleButton}
+          style={styles.headerToggleButton}
           onPress={toggleSearchMode}
         >
-          <Text style={styles.toggleButtonText}>
+          <Text style={styles.headerToggleText}>
             {advancedMode ? 'Simple Search' : 'Advanced Search'}
           </Text>
         </TouchableOpacity>
-      </View>
+      </LinearGradient>
 
       {/* Search Section */}
       {advancedMode ? (
@@ -524,7 +529,6 @@ const PlanListing = () => {
                 onChangeText={handleModelIdSearch}
                 placeholderTextColor="#94A3B8"
                 returnKeyType="search"
-                onSubmitEditing={executeModelIdSearch}
                 editable={!searching}
               />
               {searchQuery.length > 0 && (
@@ -549,7 +553,6 @@ const PlanListing = () => {
                 onChangeText={handleBodyTypeSearch}
                 placeholderTextColor="#94A3B8"
                 returnKeyType="search"
-                onSubmitEditing={executeBodyTypeSearch}
                 editable={!searching}
               />
               {bodytypeQuery.length > 0 && (
@@ -574,7 +577,6 @@ const PlanListing = () => {
                 onChangeText={handleWheelbseSearch}
                 placeholderTextColor="#94A3B8"
                 returnKeyType="search"
-                onSubmitEditing={executeWheelbseSearch}
                 editable={!searching}
                 keyboardType="number-pad"
               />
@@ -618,29 +620,30 @@ const PlanListing = () => {
         </View>
       ) : (
         // Simple search
-        <View style={styles.searchContainer}>
+        <View style={styles.searchContainerWrapper}>
           <View style={styles.simpleSearchInputContainer}>
-            <TouchableOpacity 
-              onPress={executeSimpleSearch}
-              disabled={searching}
-            >
-              <Ionicons name="search" size={20} color="#64748B" />
-            </TouchableOpacity>
-            <TextInput
-              style={styles.simpleSearchInput}
-              placeholder="Search plans by model ID"
-              value={searchQuery}
-              onChangeText={handleSimpleSearch}
-              placeholderTextColor="#64748B"
-              returnKeyType="search"
-              onSubmitEditing={executeSimpleSearch}
-              editable={!searching}
-            />
+          <TouchableOpacity 
+            onPress={executeSimpleSearch}
+            disabled={searching}
+          >
+            <Ionicons name="search" size={20} color="#64748B" />
+          </TouchableOpacity>
+          <TextInput
+            style={styles.simpleSearchInput}
+            placeholder="Search"
+            value={searchQuery}
+            onChangeText={handleSimpleSearch}  // 只更新输入值
+            placeholderTextColor="#64748B"
+            returnKeyType="search"
+            editable={!searching}
+          />
             {searchQuery.length > 0 && (
               <TouchableOpacity
                 onPress={() => {
                   setSearchQuery('');
-                  onRefresh();
+                  if (searchPerformed) {
+                    onRefresh();
+                  }
                 }}
                 style={styles.clearButtonSimple}
                 disabled={searching}
@@ -736,15 +739,22 @@ const styles = StyleSheet.create({
     marginRight: SPACING.sm,
     padding: SPACING.xs,
   },
-  headerTitle: {
+  headerTitleLight: {
     fontSize: SIZES.large,
     fontWeight: 'bold',
     color: COLORS.white,
     flex: 1,
   },
-  headerRight: {
-    width: 24,
-    height: 24,
+  headerToggleButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.sm,
+  },
+  headerToggleText: {
+    color: COLORS.white,
+    fontSize: SIZES.small,
+    fontWeight: '600',
   },
   searchWrapper: {
     paddingHorizontal: SPACING.md,
@@ -983,21 +993,6 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: SIZES.small,
   },
-  header: {
-    height: 60,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.md,
-    ...SHADOWS.medium,
-  },
-  toggleButton: {
-    padding: SPACING.xs,
-  },
-  toggleButtonText: {
-    fontSize: SIZES.small,
-    color: '#1E293B',
-    fontWeight: '600',
-  },
   advancedSearchContainer: {
     padding: SPACING.md,
   },
@@ -1035,6 +1030,9 @@ const styles = StyleSheet.create({
   },
   buttonIcon: {
     marginRight: 4,
+  },
+  searchContainerWrapper: {
+    padding: SPACING.md,
   },
   simpleSearchInputContainer: {
     flexDirection: 'row',

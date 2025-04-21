@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -19,16 +19,17 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, SIZES, SHADOWS, RADIUS } from '../../constants/theme';
 import CONFIG from '../../constants/config';
 
-// 提取成单独的组件，这样就可以在组件内部使用hooks
-const WeightCertItem = ({ item, index, navigation }) => {
+// Memoized Weight Certificate Item Component
+const WeightCertItem = React.memo(({ item, index, navigation }) => {
   const itemFadeAnim = React.useRef(new Animated.Value(0)).current;
   
   React.useEffect(() => {
-    // 让每个项目有一个微小的延迟，创造级联效果
+    // Animate items with a staggered effect, but limited to visible items
+    const delay = Math.min(index, 10) * 30; // Cap the maximum delay
     Animated.timing(itemFadeAnim, {
       toValue: 1,
-      duration: 300,
-      delay: index * 50, // 级联延迟
+      duration: 200, // Reduced duration for better performance
+      delay: delay,
       useNativeDriver: true,
     }).start();
   }, []);
@@ -38,7 +39,7 @@ const WeightCertItem = ({ item, index, navigation }) => {
     transform: [{ 
       translateY: itemFadeAnim.interpolate({
         inputRange: [0, 1],
-        outputRange: [20, 0]
+        outputRange: [15, 0] // Reduced movement for better performance
       })
     }]
   };
@@ -101,7 +102,24 @@ const WeightCertItem = ({ item, index, navigation }) => {
       </TouchableOpacity>
     </Animated.View>
   );
-};
+});
+
+// Debounce hook
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
 
 const WeightCertListing = () => {
   const navigation = useNavigation();
@@ -122,7 +140,14 @@ const WeightCertListing = () => {
   const [simpleSearchQuery, setSimpleSearchQuery] = useState('');
   const pageSize = 100;
 
-  const fetchWeightCerts = async (pageNum = 1, shouldAppend = false) => {
+  // Debounce the search queries to reduce input lag
+  const debouncedSimpleQuery = useDebounce(searchQuery, 300);
+  const debouncedModelIdQuery = useDebounce(searchQuery, 300);
+  const debouncedWheelbaseQuery = useDebounce(wheelbaseQuery, 300);
+  const debouncedAxleQuery = useDebounce(axleQuery, 300);
+
+  // Create cached versions of functions
+  const fetchWeightCerts = useCallback(async (pageNum = 1, shouldAppend = false) => {
     try {
       // Set loading states
       if (pageNum === 1) {
@@ -131,7 +156,7 @@ const WeightCertListing = () => {
         setLoadingMore(true);
       }
 
-      // 跨平台获取 token
+      // Get token based on platform
       const token = Platform.OS === 'web'
         ? window.localStorage.getItem('userToken')
         : await AsyncStorage.getItem('userToken');
@@ -172,10 +197,10 @@ const WeightCertListing = () => {
       setRefreshing(false);
       setLoadingMore(false);
     }
-  };
+  }, [pageSize]);
 
-  // Search function that uses the API endpoint
-  const searchWeightCerts = async (query, type = 'general', isInitialSearch = true) => {
+  // Memoized search function to prevent recreating on each render
+  const searchWeightCerts = useCallback(async (query, type = 'general', isInitialSearch = true) => {
     if (!query.trim() && type !== 'combined') {
       // If search is empty, reset to first page of data
       setPage(1);
@@ -184,7 +209,7 @@ const WeightCertListing = () => {
     }
 
     try {
-      // 如果是初始搜索，则调用API获取数据
+      // Only show loading indicator if it's a new search
       if (isInitialSearch) {
         setSearching(true);
         setError(null);
@@ -193,11 +218,10 @@ const WeightCertListing = () => {
           ? window.localStorage.getItem('userToken')
           : await AsyncStorage.getItem('userToken');
 
-        // 构建搜索URL
+        // Build search URL based on search type
         let searchParam = '';
         if (advancedMode) {
           if (type === 'combined') {
-            // 对于组合搜索，先使用一个最宽泛的条件获取数据，然后在本地过滤
             const mainParam = searchQuery.trim() ? `&search=${encodeURIComponent(searchQuery.trim())}` : 
                             wheelbaseQuery.trim() ? `&wheelbase=${encodeURIComponent(wheelbaseQuery.trim())}` : 
                             axleQuery.trim() ? `&axle=${encodeURIComponent(axleQuery.trim())}` : '';
@@ -218,11 +242,11 @@ const WeightCertListing = () => {
             }
           }
         } else {
-          // 简单模式
+          // Simple mode search
           searchParam = `&search=${encodeURIComponent(query)}`;
         }
 
-        // Use pagination for better performance instead of size=1000
+        // API request with pagination
         const response = await fetch(`${CONFIG.API_BASE_URL}/weightCerts?page=1&size=${pageSize}${searchParam}`, {
           method: 'GET',
           headers: {
@@ -237,27 +261,27 @@ const WeightCertListing = () => {
 
         const data = await response.json();
         
-        // 处理搜索结果
+        // Process search results
         let filteredData = data;
         
-        // 如果是组合搜索，需要在本地进行多条件筛选
+        // For combined search, filter locally with multiple conditions
         if (type === 'combined') {
           filteredData = data.filter(item => {
             let matchesAll = true;
             
-            // 检查 Model ID
+            // Check Model ID
             if (searchQuery.trim()) {
               const matchesModelId = item.model_id?.toLowerCase().includes(searchQuery.trim().toLowerCase());
               matchesAll = matchesAll && matchesModelId;
             }
             
-            // 检查 Wheelbase
+            // Check Wheelbase
             if (wheelbaseQuery.trim()) {
               const matchesWheelbase = item.wheelbase?.toLowerCase().includes(wheelbaseQuery.trim().toLowerCase());
               matchesAll = matchesAll && matchesWheelbase;
             }
             
-            // 检查 Axle
+            // Check Axle
             if (axleQuery.trim()) {
               const matchesAxle = item.axle?.toLowerCase().includes(axleQuery.trim().toLowerCase());
               matchesAll = matchesAll && matchesAxle;
@@ -277,22 +301,21 @@ const WeightCertListing = () => {
         setSearchPerformed(true);
         setError(null);
         
-        // Check if we have more data available
+        // Update pagination state
         setHasMore(data.length === pageSize && type !== 'combined');
         setPage(1);
       }
     } catch (err) {
       console.error('Search Error:', err);
       setError('Failed to search data. Please try again.');
-      // Keep existing data visible when search fails
     } finally {
       setLoading(false);
       setSearching(false);
     }
-  };
+  }, [advancedMode, searchQuery, wheelbaseQuery, axleQuery, pageSize, fetchWeightCerts]);
 
-  // New function to load more search results
-  const loadMoreSearchResults = async () => {
+  // Load more search results
+  const loadMoreSearchResults = useCallback(async () => {
     if (!hasMore || loadingMore || !searchPerformed) return;
     
     try {
@@ -304,7 +327,7 @@ const WeightCertListing = () => {
 
       const nextPage = page + 1;
       
-      // Determine which search is active
+      // Determine which search parameter to use
       let searchParam = '';
       if (!advancedMode && simpleSearchQuery) {
         searchParam = `&search=${encodeURIComponent(simpleSearchQuery)}`;
@@ -341,13 +364,23 @@ const WeightCertListing = () => {
     } finally {
       setLoadingMore(false);
     }
-  };
+  }, [hasMore, loadingMore, searchPerformed, advancedMode, page, simpleSearchQuery, searchQuery, wheelbaseQuery, axleQuery, pageSize]);
 
+  // Initial data fetch
   useEffect(() => {
     fetchWeightCerts();
-  }, []);
+  }, [fetchWeightCerts]);
 
-  const onRefresh = () => {
+  // Auto-search when debounced values change (for improved performance)
+  useEffect(() => {
+    if (!advancedMode && debouncedSimpleQuery && debouncedSimpleQuery === searchQuery) {
+      setSimpleSearchQuery(debouncedSimpleQuery);
+      searchWeightCerts(debouncedSimpleQuery, 'general');
+    }
+  }, [debouncedSimpleQuery, advancedMode, searchWeightCerts, searchQuery]);
+
+  // Refresh function
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
     setSearchPerformed(false);
     setSearchQuery('');
@@ -356,20 +389,22 @@ const WeightCertListing = () => {
     setSimpleSearchQuery('');
     setFilteredCerts([]);
     fetchWeightCerts(1, false);
-  };
+  }, [fetchWeightCerts]);
 
-  const loadMoreData = () => {
+  // Load more handler for FlatList
+  const loadMoreData = useCallback(() => {
     if (searchPerformed) {
       loadMoreSearchResults();
     } else if (hasMore && !loadingMore) {
       fetchWeightCerts(page + 1, true);
     }
-  };
+  }, [searchPerformed, loadMoreSearchResults, hasMore, loadingMore, fetchWeightCerts, page]);
 
-  const toggleSearchMode = () => {
-    setAdvancedMode(!advancedMode);
+  // Toggle between search modes
+  const toggleSearchMode = useCallback(() => {
+    setAdvancedMode(prev => !prev);
     
-    // When toggling, reset all search fields and results
+    // Reset search state
     setSearchQuery('');
     setWheelbaseQuery('');
     setAxleQuery('');
@@ -380,52 +415,54 @@ const WeightCertListing = () => {
       setFilteredCerts([]);
       fetchWeightCerts(1, false);
     }
-  };
+  }, [searchPerformed, fetchWeightCerts]);
 
-  const handleSimpleSearch = (text) => {
+  // Input handlers - simplified to just update state
+  const handleSimpleSearch = useCallback((text) => {
     setSearchQuery(text);
-  };
+  }, []);
 
-  const handleModelIdSearch = (text) => {
+  const handleModelIdSearch = useCallback((text) => {
     setSearchQuery(text);
-  };
+  }, []);
 
-  const handleWheelbaseSearch = (text) => {
+  const handleWheelbaseSearch = useCallback((text) => {
     setWheelbaseQuery(text);
-  };
+  }, []);
 
-  const handleAxleSearch = (text) => {
+  const handleAxleSearch = useCallback((text) => {
     setAxleQuery(text);
-  };
+  }, []);
 
-  const executeSimpleSearch = () => {
+  // Search execution functions
+  const executeSimpleSearch = useCallback(() => {
     setSimpleSearchQuery(searchQuery);
     searchWeightCerts(searchQuery, 'general');
-  };
+  }, [searchQuery, searchWeightCerts]);
 
-  const executeModelIdSearch = () => {
+  const executeModelIdSearch = useCallback(() => {
     searchWeightCerts(searchQuery, 'model_id');
-  };
+  }, [searchQuery, searchWeightCerts]);
 
-  const executeWheelbaseSearch = () => {
+  const executeWheelbaseSearch = useCallback(() => {
     searchWeightCerts(wheelbaseQuery, 'wheelbase');
-  };
+  }, [wheelbaseQuery, searchWeightCerts]);
 
-  const executeAxleSearch = () => {
+  const executeAxleSearch = useCallback(() => {
     searchWeightCerts(axleQuery, 'axle');
-  };
+  }, [axleQuery, searchWeightCerts]);
 
-  const executeAdvancedSearch = () => {
-    // 检查是否至少有一个查询条件
+  const executeAdvancedSearch = useCallback(() => {
+    // Verify at least one field has input
     const hasCondition = searchQuery.trim() || wheelbaseQuery.trim() || axleQuery.trim();
     if (hasCondition) {
       searchWeightCerts('combined', 'combined');
     } else {
       setError('Please enter at least one search condition');
     }
-  };
+  }, [searchQuery, wheelbaseQuery, axleQuery, searchWeightCerts]);
 
-  const resetAllSearches = () => {
+  const resetAllSearches = useCallback(() => {
     setSearchQuery('');
     setWheelbaseQuery('');
     setAxleQuery('');
@@ -436,27 +473,57 @@ const WeightCertListing = () => {
       setFilteredCerts([]);
       fetchWeightCerts(1, false); 
     }
-  };
+  }, [searchPerformed, fetchWeightCerts]);
 
-  const renderWeightCert = ({ item, index }) => {
+  // Memoized renderItem function for FlatList
+  const renderWeightCert = useCallback(({ item, index }) => {
     return <WeightCertItem item={item} index={index} navigation={navigation} />;
-  };
+  }, [navigation]);
 
-  const renderFooter = () => {
+  // Memoized list footer component
+  const renderFooter = useMemo(() => {
     if (!loadingMore) return null;
     
     return (
       <View style={styles.loadMoreContainer}>
-        <ActivityIndicator size="small" color="#F43F5E" />
+        <ActivityIndicator size="small" color="#3B82F6" />
         <Text style={styles.loadMoreText}>Loading more certificates...</Text>
       </View>
     );
-  };
+  }, [loadingMore]);
 
+  // Memoize empty list component to prevent recreating on renders
+  const renderEmptyComponent = useMemo(() => {
+    if (loading || searching) {
+      return searching ? (
+        <View style={styles.searchingContainer}>
+          <ActivityIndicator size="large" color="#3B82F6" />
+          <Text style={styles.searchingText}>Searching...</Text>
+        </View>
+      ) : null;
+    }
+    
+    if (error) return null;
+    
+    return (
+      <View style={styles.emptyContainer}>
+        <Ionicons name="document-text" size={60} color="#94A3B8" />
+        <Text style={styles.emptyText}>No weight certificates found</Text>
+        <TouchableOpacity 
+          style={styles.emptyButton}
+          onPress={onRefresh}
+        >
+          <Text style={styles.emptyButtonText}>Refresh</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }, [loading, searching, error, onRefresh]);
+
+  // Display loading state
   if (loading && !refreshing && !searching) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#F43F5E" />
+        <ActivityIndicator size="large" color="#3B82F6" />
         <Text style={styles.loadingText}>Loading weight certificates...</Text>
       </View>
     );
@@ -464,11 +531,11 @@ const WeightCertListing = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#F43F5E" />
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       {/* Header */}
       <LinearGradient
-        colors={['#F43F5E', '#FB7185']}
+        colors={['#0F172A', '#334155']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 0 }}
         style={styles.header}
@@ -477,14 +544,14 @@ const WeightCertListing = () => {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Ionicons name="arrow-back" size={24} color={COLORS.white} />
+          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Weight Certificates</Text>
+        <Text style={styles.headerTitleLight}>Weight Certificates</Text>
         <TouchableOpacity
-          style={styles.toggleButton}
+          style={styles.headerToggleButton}
           onPress={toggleSearchMode}
         >
-          <Text style={styles.toggleButtonText}>
+          <Text style={styles.headerToggleText}>
             {advancedMode ? 'Simple Search' : 'Advanced Search'}
           </Text>
         </TouchableOpacity>
@@ -504,7 +571,6 @@ const WeightCertListing = () => {
                 onChangeText={handleModelIdSearch}
                 placeholderTextColor="#94A3B8"
                 returnKeyType="search"
-                onSubmitEditing={executeModelIdSearch}
                 editable={!searching}
               />
               {searchQuery.length > 0 && (
@@ -529,7 +595,6 @@ const WeightCertListing = () => {
                 onChangeText={handleWheelbaseSearch}
                 placeholderTextColor="#94A3B8"
                 returnKeyType="search"
-                onSubmitEditing={executeWheelbaseSearch}
                 editable={!searching}
               />
               {wheelbaseQuery.length > 0 && (
@@ -554,7 +619,6 @@ const WeightCertListing = () => {
                 onChangeText={handleAxleSearch}
                 placeholderTextColor="#94A3B8"
                 returnKeyType="search"
-                onSubmitEditing={executeAxleSearch}
                 editable={!searching}
               />
               {axleQuery.length > 0 && (
@@ -597,7 +661,7 @@ const WeightCertListing = () => {
         </View>
       ) : (
         // Simple search
-        <View style={styles.searchContainer}>
+        <View style={styles.searchContainerWrapper}>
           <View style={styles.simpleSearchInputContainer}>
             <TouchableOpacity 
               onPress={executeSimpleSearch}
@@ -607,19 +671,20 @@ const WeightCertListing = () => {
             </TouchableOpacity>
             <TextInput
               style={styles.simpleSearchInput}
-              placeholder="Search certificates by model ID"
+              placeholder="Search"
               value={searchQuery}
               onChangeText={handleSimpleSearch}
               placeholderTextColor="#64748B"
               returnKeyType="search"
-              onSubmitEditing={executeSimpleSearch}
               editable={!searching}
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity
                 onPress={() => {
                   setSearchQuery('');
-                  onRefresh();
+                  if (searchPerformed) {
+                    onRefresh();
+                  }
                 }}
                 style={styles.clearButtonSimple}
                 disabled={searching}
@@ -628,7 +693,7 @@ const WeightCertListing = () => {
               </TouchableOpacity>
             )}
             {searching && (
-              <ActivityIndicator size="small" color="#F43F5E" style={styles.searchingIndicator} />
+              <ActivityIndicator size="small" color="#3B82F6" style={styles.searchingIndicator} />
             )}
           </View>
         </View>
@@ -642,7 +707,7 @@ const WeightCertListing = () => {
         </View>
       )}
 
-      {/* Results */}
+      {/* Results - with optimized FlatList */}
       <FlatList
         data={filteredCerts.length > 0 ? filteredCerts : weightCerts}
         renderItem={renderWeightCert}
@@ -651,6 +716,10 @@ const WeightCertListing = () => {
         ListFooterComponent={renderFooter}
         onEndReached={loadMoreData}
         onEndReachedThreshold={0.5}
+        maxToRenderPerBatch={10} // Limit batch rendering for smoother scrolling
+        windowSize={10} // Reduce window size for better performance
+        initialNumToRender={8} // Reduced initial render count
+        removeClippedSubviews={true} // Optimize memory by removing items out of view
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -658,25 +727,7 @@ const WeightCertListing = () => {
             colors={['#F43F5E']}
           />
         }
-        ListEmptyComponent={
-          !loading && !searching && !error ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="document-text" size={60} color="#94A3B8" />
-              <Text style={styles.emptyText}>No weight certificates found</Text>
-              <TouchableOpacity 
-                style={styles.emptyButton}
-                onPress={onRefresh}
-              >
-                <Text style={styles.emptyButtonText}>Refresh</Text>
-              </TouchableOpacity>
-            </View>
-          ) : searching ? (
-            <View style={styles.searchingContainer}>
-              <ActivityIndicator size="large" color="#F43F5E" />
-              <Text style={styles.searchingText}>Searching...</Text>
-            </View>
-          ) : null
-        }
+        ListEmptyComponent={renderEmptyComponent}
       />
     </View>
   );
@@ -710,11 +761,22 @@ const styles = StyleSheet.create({
     marginRight: SPACING.sm,
     padding: SPACING.xs,
   },
-  headerTitle: {
+  headerTitleLight: {
     fontSize: SIZES.large,
     fontWeight: 'bold',
     color: COLORS.white,
     flex: 1,
+  },
+  headerToggleButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.sm,
+  },
+  headerToggleText: {
+    color: COLORS.white,
+    fontSize: SIZES.small,
+    fontWeight: '600',
   },
   searchWrapper: {
     paddingHorizontal: SPACING.md,
@@ -854,7 +916,7 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
   },
   emptyButton: {
-    backgroundColor: '#F43F5E',
+    backgroundColor: '#1E293B',
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.sm,
     borderRadius: RADIUS.md,
@@ -876,7 +938,7 @@ const styles = StyleSheet.create({
     fontSize: SIZES.small,
   },
   resetButton: {
-    backgroundColor: '#F43F5E',
+    backgroundColor: '#1E293B',
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: RADIUS.md,
@@ -884,7 +946,7 @@ const styles = StyleSheet.create({
     ...SHADOWS.small,
   },
   searchButton: {
-    backgroundColor: '#F43F5E',
+    backgroundColor: '#1E293B',
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: RADIUS.md,
@@ -946,17 +1008,6 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: SIZES.small,
   },
-  toggleButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.xs,
-    borderRadius: RADIUS.sm,
-  },
-  toggleButtonText: {
-    color: COLORS.white,
-    fontSize: SIZES.small,
-    fontWeight: '600',
-  },
   advancedSearchContainer: {
     padding: SPACING.md,
   },
@@ -992,6 +1043,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
     ...SHADOWS.small,
   },
+  searchContainerWrapper: {
+    padding: SPACING.md,
+  },
   simpleSearchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1010,6 +1064,14 @@ const styles = StyleSheet.create({
   },
   clearButtonSimple: {
     padding: SPACING.xs,
+  },
+  buttonIcon: {
+    marginRight: 4,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: SIZES.small,
+    fontWeight: '600',
   },
 });
 
